@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.env
+*.md
+!README.md
+infrastructure
+apps/e2e
+apps/frontend/dist
+apps/backend/dist
+apps/agents/dist
+.gstack
+.claude

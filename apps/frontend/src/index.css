@@ -1,0 +1,102 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* SLO Events Design System — sunset orange + stone neutrals */
+    --background: 60 9% 98%;           /* stone-50 #FAFAF9 */
+    --foreground: 24 10% 10%;          /* stone-900 #1C1917 */
+    --card: 0 0% 100%;                 /* white */
+    --card-foreground: 24 10% 10%;     /* stone-900 */
+    --popover: 0 0% 100%;
+    --popover-foreground: 24 10% 10%;
+    --primary: 21 90% 48%;             /* sunset orange #EA580C */
+    --primary-foreground: 0 0% 100%;   /* white */
+    --secondary: 60 5% 96%;            /* stone-100 #F5F5F4 */
+    --secondary-foreground: 24 10% 10%;
+    --muted: 60 5% 96%;                /* stone-100 */
+    --muted-foreground: 25 6% 45%;     /* stone-500 #78716C */
+    --accent: 174 78% 26%;             /* ocean teal #0F766E */
+    --accent-foreground: 0 0% 100%;    /* white */
+    --destructive: 0 72% 41%;          /* #B91C1C */
+    --destructive-foreground: 0 0% 100%;
+    --border: 30 6% 90%;               /* stone-200 #E7E5E4 */
+    --input: 30 6% 90%;
+    --ring: 21 90% 48%;                /* primary */
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 24 10% 10%;          /* stone-900 #1C1917 */
+    --foreground: 60 9% 98%;           /* stone-50 #FAFAF9 */
+    --card: 20 8% 15%;                 /* stone-800 #292524 */
+    --card-foreground: 60 9% 98%;
+    --popover: 20 8% 15%;
+    --popover-foreground: 60 9% 98%;
+    --primary: 27 96% 61%;             /* lighter orange #FB923C for dark mode */
+    --primary-foreground: 24 10% 10%;
+    --secondary: 20 6% 25%;            /* stone-700 #44403C */
+    --secondary-foreground: 60 9% 98%;
+    --muted: 20 6% 25%;
+    --muted-foreground: 25 5% 53%;     /* stone-500 */
+    --accent: 168 76% 50%;             /* lighter teal #2DD4BF */
+    --accent-foreground: 24 10% 10%;
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 60 9% 98%;
+    --border: 20 6% 25%;               /* stone-700 */
+    --input: 20 6% 25%;
+    --ring: 27 96% 61%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Custom scrollbar styles */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-muted;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-border rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-border/80;
+}
+
+/* Smooth transitions */
+* {
+  @apply transition-colors duration-200;
+}
+
+/* Prose styles for event descriptions */
+.prose {
+  @apply text-foreground;
+}
+
+.prose p {
+  @apply mb-4;
+}
+
+.prose h1,
+.prose h2,
+.prose h3 {
+  @apply font-semibold tracking-tight;
+}
+
+.prose a {
+  @apply text-primary underline underline-offset-4 hover:text-primary/80;
+}

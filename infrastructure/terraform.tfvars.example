@@ -1,0 +1,46 @@
+# Environment Configuration
+environment  = "dev"
+region       = "us-west-2"
+project_name = "slo-events"
+
+# VPC Configuration
+vpc_cidr           = "10.0.0.0/16"
+availability_zones = ["us-west-2a", "us-west-2b", "us-west-2c"]
+
+# Database Configuration (override defaults if needed)
+# db_instance_class = {
+#   dev     = "db.t4g.micro"
+#   staging = "db.t4g.small"
+#   prod    = "db.r6g.large"
+# }
+
+db_name     = "sloevents"
+db_username = "sloadmin"
+
+# ElastiCache Configuration (override defaults if needed)
+# redis_node_type = {
+#   dev     = "cache.t4g.micro"
+#   staging = "cache.t4g.small"
+#   prod    = "cache.r6g.large"
+# }
+
+# ECS Configuration (override defaults if needed)
+# backend_api_desired_count = {
+#   dev     = 1
+#   staging = 2
+#   prod    = 3
+# }
+
+# Domain Configuration (optional)
+# domain_name         = "slo-events.example.com"
+# acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/..."
+
+# Monitoring Configuration
+alarm_email = "ops@example.com"
+enable_waf  = true
+
+# Additional Tags
+additional_tags = {
+  Team       = "Platform"
+  CostCenter = "Engineering"
+}

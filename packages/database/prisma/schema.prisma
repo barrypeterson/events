@@ -1,0 +1,421 @@
+// Prisma schema for SLO Events Platform
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector, uuid_ossp(map: "uuid-ossp"), pg_trgm]
+}
+
+// ============================================================================
+// VENUES
+// ============================================================================
+
+model Venue {
+  id             String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  name           String   @db.VarChar(255)
+  normalizedName String   @map("normalized_name") @db.VarChar(255)
+  address        String?
+  city           String?  @db.VarChar(100)
+  state          String?  @default("CA") @db.VarChar(2)
+  zipCode        String?  @map("zip_code") @db.VarChar(10)
+  latitude       Decimal? @db.Decimal(10, 8)
+  longitude      Decimal? @db.Decimal(11, 8)
+  website        String?  @db.VarChar(500)
+  phone          String?  @db.VarChar(20)
+  venueType      String?  @map("venue_type") @db.VarChar(50) // "theater", "bar", "outdoor", "venue", etc.
+  imageUrl       String?  @map("image_url") @db.VarChar(500) // Default venue image
+
+  // pgvector embedding for venue similarity
+  embedding      Unsupported("vector(1536)")? @map("embedding")
+
+  metadata       Json?    // Additional flexible data
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  events           Event[]
+  duplicates       VenueDuplicate[] @relation("CanonicalVenue")
+  duplicateOf      VenueDuplicate[] @relation("DuplicateVenue")
+  recurringPatterns RecurringPattern[]
+  scraperConfigs   VenueScraperConfig[]
+
+  @@unique([normalizedName, city])
+  @@index([city])
+  @@index([venueType])
+  @@map("venues")
+}
+
+model VenueScraperConfig {
+  id                String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  venueId           String    @map("venue_id") @db.Uuid
+  venue             Venue     @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  sourceUrl         String    @map("source_url") @db.VarChar(500)
+  sourceName        String    @unique @map("source_name") @db.VarChar(100)
+  scrapingEnabled   Boolean   @default(false) @map("scraping_enabled")
+  schedule          String    @default("0 */6 * * *") @db.VarChar(50)
+  pageAnalysis      Json?     @map("page_analysis")
+  analysisModel     String?   @map("analysis_model") @db.VarChar(50)
+  analyzedAt        DateTime? @map("analyzed_at") @db.Timestamptz
+  refreshModel      String    @default("gpt-4o-mini") @map("refresh_model") @db.VarChar(50)
+  lastRefreshedAt   DateTime? @map("last_refreshed_at") @db.Timestamptz
+  lastRefreshStatus String?   @map("last_refresh_status") @db.VarChar(20)
+  waitForSelector   String?   @map("wait_for_selector") @db.VarChar(255)
+  requiresScrolling Boolean   @default(false) @map("requires_scrolling")
+  metadata          Json?
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  @@unique([venueId, sourceUrl])
+  @@index([scrapingEnabled])
+  @@map("venue_scraper_configs")
+}
+
+// ============================================================================
+// EVENTS
+// ============================================================================
+
+enum EventCategory {
+  MUSIC
+  COMEDY
+  THEATER
+  SPORTS
+  FOOD_WINE
+  ARTS
+  COMMUNITY
+  FAMILY
+  KIDS
+  OUTDOOR
+  FITNESS
+  EDUCATION
+  BUSINESS
+  OTHER
+
+  @@map("event_category")
+}
+
+enum EventStatus {
+  ACTIVE
+  CANCELLED
+  POSTPONED
+  MERGED
+  DELETED
+
+  @@map("event_status")
+}
+
+model Event {
+  id              String        @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  title           String        @db.VarChar(500)
+  normalizedTitle String        @map("normalized_title") @db.VarChar(500)
+  description     String?       @db.Text
+
+  // Date and time
+  startDateTime   DateTime      @map("start_datetime") @db.Timestamptz
+  endDateTime     DateTime?     @map("end_datetime") @db.Timestamptz
+  timezone        String        @default("America/Los_Angeles") @db.VarChar(50)
+
+  // Venue
+  venueId         String        @map("venue_id") @db.Uuid
+  venue           Venue         @relation(fields: [venueId], references: [id])
+
+  // Categorization
+  category        EventCategory[]
+  tags            String[]      @db.VarChar(100)
+
+  // Media
+  images          String[]      @db.Text
+  ticketUrl       String?       @map("ticket_url") @db.VarChar(500)
+
+  // Pricing
+  priceMin        Decimal?      @map("price_min") @db.Decimal(10, 2)
+  priceMax        Decimal?      @map("price_max") @db.Decimal(10, 2)
+  isFree          Boolean       @default(false) @map("is_free")
+
+  // Restrictions
+  ageRestriction  String?       @map("age_restriction") @db.VarChar(50) // "21+", "18+", "All Ages"
+
+  // pgvector embedding for semantic search and deduplication
+  embedding       Unsupported("vector(1536)") @map("embedding")
+
+  // Recurring event handling
+  isRecurring     Boolean       @default(false) @map("is_recurring")
+  recurringPattern Json?        @map("recurring_pattern")
+  recurringSeriesId String?     @map("recurring_series_id") @db.Uuid
+
+  // Data quality
+  confidenceScore Decimal       @default(1.0) @map("confidence_score") @db.Decimal(3, 2)
+  status          EventStatus   @default(ACTIVE)
+
+  // Metadata
+  metadata        Json?         // Flexible additional data
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  sources         EventSource[]
+  duplicates      EventDuplicate[] @relation("CanonicalEvent")
+  duplicateOf     EventDuplicate[] @relation("DuplicateEvent")
+  userInteractions UserEventInteraction[]
+  userBlocks      UserBlockedEvent[]
+
+  @@index([startDateTime])
+  @@index([venueId])
+  @@index([status])
+  @@index([category])
+  @@index([isRecurring])
+  @@index([recurringSeriesId])
+  @@map("events")
+}
+
+// ============================================================================
+// EVENT SOURCES (for deduplication tracking)
+// ============================================================================
+
+model EventSource {
+  id          String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  eventId     String   @map("event_id") @db.Uuid
+  event       Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  sourceUrl   String   @map("source_url") @db.VarChar(500)
+  sourceName  String   @map("source_name") @db.VarChar(100)
+  scrapedAt   DateTime @default(now()) @map("scraped_at")
+
+  rawData     Json?    @map("raw_data") // Original scraped data
+
+  @@unique([eventId, sourceUrl])
+  @@index([sourceName])
+  @@map("event_sources")
+}
+
+// ============================================================================
+// DUPLICATE EVENTS
+// ============================================================================
+
+model EventDuplicate {
+  id                String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  canonicalEventId  String   @map("canonical_event_id") @db.Uuid
+  duplicateEventId  String   @map("duplicate_event_id") @db.Uuid
+  similarityScore   Decimal  @map("similarity_score") @db.Decimal(3, 2)
+  mergedAt          DateTime @default(now()) @map("merged_at")
+
+  canonicalEvent    Event    @relation("CanonicalEvent", fields: [canonicalEventId], references: [id])
+  duplicateEvent    Event    @relation("DuplicateEvent", fields: [duplicateEventId], references: [id])
+
+  @@unique([canonicalEventId, duplicateEventId])
+  @@map("event_duplicates")
+}
+
+// ============================================================================
+// DUPLICATE VENUES
+// ============================================================================
+
+model VenueDuplicate {
+  id                String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  canonicalVenueId  String   @map("canonical_venue_id") @db.Uuid
+  duplicateVenueId  String   @map("duplicate_venue_id") @db.Uuid
+  similarityScore   Decimal  @map("similarity_score") @db.Decimal(3, 2)
+  matchReason       String   @map("match_reason") @db.VarChar(100) // "same_address", "same_coordinates", "fuzzy_name"
+  distance          Decimal? @map("distance") @db.Decimal(10, 2) // Distance in meters for coordinate matches
+  mergedAt          DateTime @default(now()) @map("merged_at")
+  mergedBy          String?  @map("merged_by") @db.VarChar(100) // "auto", "manual", or user ID
+
+  canonicalVenue    Venue    @relation("CanonicalVenue", fields: [canonicalVenueId], references: [id])
+  duplicateVenue    Venue    @relation("DuplicateVenue", fields: [duplicateVenueId], references: [id])
+
+  @@unique([canonicalVenueId, duplicateVenueId])
+  @@index([matchReason])
+  @@map("venue_duplicates")
+}
+
+// ============================================================================
+// RECURRING EVENT PATTERNS (Learning System)
+// ============================================================================
+
+model RecurringPattern {
+  id              String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  pattern         String   @db.VarChar(255) // Pattern that identifies recurring events (e.g., "trivia night", "open mic")
+  venueId         String?  @map("venue_id") @db.Uuid // Venue-specific pattern or null for global
+  venue           Venue?   @relation(fields: [venueId], references: [id])
+
+  frequency       String   @db.VarChar(50) // "weekly", "biweekly", "monthly", "daily"
+  dayOfWeek       Int?     @map("day_of_week") // 0-6 for Sunday-Saturday
+  timeOfDay       String?  @map("time_of_day") @db.VarChar(20) // e.g., "19:00", "14:30"
+
+  confidence      Decimal  @db.Decimal(3, 2) // 0.0-1.0 confidence score
+  source          String   @db.VarChar(50) // "manual", "auto", "learned"
+  timesDetected   Int      @default(1) @map("times_detected") // How many times this pattern was found
+  lastSeen        DateTime @default(now()) @map("last_seen")
+
+  metadata        Json?    // Additional pattern data
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@unique([pattern, venueId])
+  @@index([venueId])
+  @@index([confidence])
+  @@map("recurring_patterns")
+}
+
+// ============================================================================
+// USERS
+// ============================================================================
+
+model User {
+  id        String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  email     String   @unique @db.VarChar(255)
+  firstName String?  @map("first_name") @db.VarChar(100)
+  lastName  String?  @map("last_name") @db.VarChar(100)
+
+  // Authentication
+  passwordHash String? @map("password_hash") @db.VarChar(255)
+
+  // Spotify integration
+  spotifyUserId       String?  @unique @map("spotify_user_id") @db.VarChar(255)
+  spotifyAccessToken  String?  @map("spotify_access_token") @db.Text
+  spotifyRefreshToken String?  @map("spotify_refresh_token") @db.Text
+  spotifyTokenExpiry  DateTime? @map("spotify_token_expiry")
+
+  // User preferences
+  preferences Json?    // Notification settings, UI preferences, etc.
+
+  // Timestamps
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  lastLoginAt DateTime? @map("last_login_at")
+
+  // Relations
+  eventInteractions  UserEventInteraction[]
+  blockedEvents      UserBlockedEvent[]
+  blockedRecurring   UserBlockedRecurring[]
+  spotifyArtists     UserSpotifyArtist[]
+
+  @@map("users")
+}
+
+// ============================================================================
+// USER INTERACTIONS
+// ============================================================================
+
+enum InteractionType {
+  INTERESTED
+  GOING
+  NOT_INTERESTED
+  SAVED
+  SHARED
+
+  @@map("interaction_type")
+}
+
+model UserEventInteraction {
+  id              String          @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  userId          String          @map("user_id") @db.Uuid
+  eventId         String          @map("event_id") @db.Uuid
+  interactionType InteractionType @map("interaction_type")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event           Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, eventId, interactionType])
+  @@index([userId])
+  @@index([eventId])
+  @@map("user_event_interactions")
+}
+
+// ============================================================================
+// USER BLOCKING
+// ============================================================================
+
+model UserBlockedEvent {
+  userId    String   @map("user_id") @db.Uuid
+  eventId   String   @map("event_id") @db.Uuid
+  blockedAt DateTime @default(now()) @map("blocked_at")
+  reason    String?  @db.VarChar(255)
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@id([userId, eventId])
+  @@map("user_blocked_events")
+}
+
+model UserBlockedRecurring {
+  userId              String   @map("user_id") @db.Uuid
+  recurringPatternId  String   @map("recurring_pattern_id") @db.VarChar(255)
+  blockedAt           DateTime @default(now()) @map("blocked_at")
+  reason              String?  @db.VarChar(255)
+
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, recurringPatternId])
+  @@map("user_blocked_recurring")
+}
+
+// ============================================================================
+// SPOTIFY INTEGRATION
+// ============================================================================
+
+enum SpotifyTerm {
+  SHORT  // ~4 weeks
+  MEDIUM // ~6 months
+  LONG   // several years
+
+  @@map("spotify_term")
+}
+
+model UserSpotifyArtist {
+  id              String       @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  userId          String       @map("user_id") @db.Uuid
+  artistName      String       @map("artist_name") @db.VarChar(255)
+  spotifyArtistId String       @map("spotify_artist_id") @db.VarChar(255)
+  playCount       Int          @default(0) @map("play_count")
+  term            SpotifyTerm
+  lastUpdated     DateTime     @default(now()) @map("last_updated")
+
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, spotifyArtistId, term])
+  @@index([userId])
+  @@index([artistName])
+  @@map("user_spotify_artists")
+}
+
+// ============================================================================
+// SCRAPER METADATA
+// ============================================================================
+
+enum ScraperStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+  CANCELLED
+
+  @@map("scraper_status")
+}
+
+model ScraperRun {
+  id           String         @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  sourceName   String         @map("source_name") @db.VarChar(100)
+  sourceUrl    String?        @map("source_url") @db.VarChar(500)
+  status       ScraperStatus
+
+  eventsFound  Int            @default(0) @map("events_found")
+  eventsNew    Int            @default(0) @map("events_new")
+  eventsUpdated Int           @default(0) @map("events_updated")
+
+  errorMessage String?        @map("error_message") @db.Text
+  metadata     Json?          // Agent-specific metadata
+
+  startedAt    DateTime       @default(now()) @map("started_at")
+  completedAt  DateTime?      @map("completed_at")
+
+  @@index([sourceName])
+  @@index([status])
+  @@index([startedAt])
+  @@map("scraper_runs")
+}
