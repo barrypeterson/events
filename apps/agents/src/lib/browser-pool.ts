@@ -40,7 +40,7 @@ const POST_STEALTH_INIT = `
   if (window.outerHeight === 0) Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight });
 `;
 
-function contextOptionsFromFingerprint(fp: Fingerprint): BrowserContextOptions {
+function contextOptionsFromFingerprint(fp: Fingerprint, useProxy: boolean): BrowserContextOptions {
   const options: BrowserContextOptions = {
     viewport: fp.viewport,
     userAgent: fp.userAgent,
@@ -55,8 +55,10 @@ function contextOptionsFromFingerprint(fp: Fingerprint): BrowserContextOptions {
       'Accept-Language': 'en-US,en;q=0.9',
     },
   };
-  const proxy = playwrightProxy();
-  if (proxy) options.proxy = proxy;
+  if (useProxy) {
+    const proxy = playwrightProxy();
+    if (proxy) options.proxy = proxy;
+  }
   return options;
 }
 
@@ -96,15 +98,18 @@ class BrowserPool {
   /**
    * Create a new context with a fresh fingerprint. Pass a fingerprint explicitly
    * to force a specific identity (used by retry logic to rotate per attempt).
+   * `useProxy` routes the context through the configured residential proxy;
+   * off by default so direct connections stay direct until a venue escalates.
    */
   async createContext(
     overrides?: Partial<BrowserContextOptions>,
     fingerprint?: Fingerprint,
+    useProxy = false,
   ): Promise<BrowserContext> {
     const browser = await this.getBrowser();
     const fp = fingerprint ?? pickFingerprint();
     const context = await browser.newContext({
-      ...contextOptionsFromFingerprint(fp),
+      ...contextOptionsFromFingerprint(fp, useProxy),
       ...overrides,
     });
     await context.addInitScript(POST_STEALTH_INIT);

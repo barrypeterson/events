@@ -4,7 +4,21 @@ import { logger } from './scraper-utils';
 import { browserPool } from './browser-pool';
 import { pickFingerprintExcept, fetchHeaders } from './stealth-fingerprints';
 import { humanScroll, humanDelay, jitter } from './human-timing';
-import { fetchDispatcher } from './proxy';
+import { fetchDispatcher, isProxyEnabled } from './proxy';
+
+export interface NavigateOptions {
+  /**
+   * Force the request through the residential proxy. Set by the caller for
+   * venues already known to block our datacenter IP (VenueScraperConfig.requiresProxy).
+   */
+  useProxy?: boolean;
+  /**
+   * Invoked when a direct attempt is blocked but a subsequent proxy attempt
+   * succeeds. Lets the caller persist `requiresProxy=true` on the config so
+   * future runs skip the pointless direct attempt.
+   */
+  onProxyEscalation?: () => void | Promise<void>;
+}
 
 /**
  * Extract clean visible text from a rendered page.
@@ -203,6 +217,7 @@ function logAttempt(url: string, outcome: NavOutcome): void {
 async function fetchAndClean(
   url: string,
   attempt: number,
+  useProxy: boolean,
 ): Promise<{ cleanText: string; status: number; fp: string; elapsedMs: number; verdict: NavOutcome['verdict']; detail?: string } | null> {
   const fp = pickFingerprintExcept(new Set());
   const fpLabel = fpId(fp);
@@ -210,7 +225,7 @@ async function fetchAndClean(
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
-    const dispatcher = fetchDispatcher();
+    const dispatcher = useProxy ? fetchDispatcher() : undefined;
     const res = await fetch(url, {
       headers: fetchHeaders(fp),
       redirect: 'follow',
@@ -367,12 +382,13 @@ async function playwrightAttempt(
   analysis: PageAnalysis | null | undefined,
   attempt: number,
   rejectedUAs: Set<string>,
+  useProxy: boolean,
 ): Promise<{ cleanText: string; status: number; fp: string; elapsedMs: number; verdict: NavOutcome['verdict']; detail?: string }> {
   const fp = pickFingerprintExcept(rejectedUAs);
   rejectedUAs.add(fp.userAgent);
   const fpLabel = fpId(fp);
   const start = Date.now();
-  const context = await browserPool.createContext(undefined, fp);
+  const context = await browserPool.createContext(undefined, fp, useProxy);
   const page = await context.newPage();
   try {
     if (attempt > 1) {
@@ -437,19 +453,80 @@ export async function navigateAndExtract(
   pageOrUnused: Page | null,
   url: string,
   analysis?: PageAnalysis | null,
+  options?: NavigateOptions,
 ): Promise<{ cleanText: string; status: number }> {
   void pageOrUnused; // retained in signature for caller compatibility
 
   const overallStart = Date.now();
+  const useProxyInitial = options?.useProxy === true;
+
+  const firstPass = await runNavigation(url, analysis, useProxyInitial);
+
+  // Escalation: direct attempts failed with a block-status verdict, proxy is
+  // configured, and the caller hadn't already asked for it. Try once more
+  // through the proxy; if it resolves, notify the caller so they can persist
+  // `requiresProxy=true` and skip the direct attempts on future runs.
+  if (
+    !useProxyInitial &&
+    firstPass.terminalVerdict === 'blocked' &&
+    isProxyEnabled()
+  ) {
+    logger.warn(
+      `[navigate] ${url} ESCALATING to proxy after direct=blocked (last_status=${firstPass.status})`,
+    );
+    const proxied = await runNavigation(url, analysis, true);
+    if (proxied.resolved) {
+      logger.info(
+        `[navigate] ${url} DONE via proxy-escalation status=${proxied.status} clean=${proxied.cleanText.length} total_ms=${Date.now() - overallStart}`,
+      );
+      if (options?.onProxyEscalation) {
+        try {
+          await options.onProxyEscalation();
+        } catch (err: any) {
+          logger.warn(`[navigate] onProxyEscalation callback threw: ${err?.message || err}`);
+        }
+      }
+      return { cleanText: proxied.cleanText, status: proxied.status };
+    }
+    logger.warn(
+      `[navigate] ${url} proxy-escalation failed status=${proxied.status} verdict=${proxied.terminalVerdict}`,
+    );
+  }
+
+  if (firstPass.resolved) {
+    return { cleanText: firstPass.cleanText, status: firstPass.status };
+  }
+  if (firstPass.thrown) {
+    throw firstPass.thrown;
+  }
+  return { cleanText: firstPass.cleanText, status: firstPass.status };
+}
+
+interface NavigationOutcome {
+  resolved: boolean;
+  cleanText: string;
+  status: number;
+  terminalVerdict: NavOutcome['verdict'];
+  thrown?: Error;
+}
+
+async function runNavigation(
+  url: string,
+  analysis: PageAnalysis | null | undefined,
+  useProxy: boolean,
+): Promise<NavigationOutcome> {
   const pageType = analysis?.pageType;
   const canFetch = pageType === 'static' || pageType === undefined || pageType === null;
 
   logger.info(
-    `[navigate] ${url} start pageType=${pageType ?? 'unknown'} canFetch=${canFetch}`,
+    `[navigate] ${url} start pageType=${pageType ?? 'unknown'} canFetch=${canFetch} useProxy=${useProxy}`,
   );
 
+  let lastStatus = 0;
+  let lastVerdict: NavOutcome['verdict'] = 'threw';
+
   if (canFetch) {
-    const fetchResult = await fetchAndClean(url, 1);
+    const fetchResult = await fetchAndClean(url, 1, useProxy);
     if (fetchResult === null) {
       logAttempt(url, {
         phase: 'fetch',
@@ -470,11 +547,15 @@ export async function navigateAndExtract(
         detail: fetchResult.detail,
         fingerprint: fetchResult.fp,
       });
+      lastStatus = fetchResult.status;
+      lastVerdict = fetchResult.verdict;
       if (fetchResult.verdict === 'resolved') {
-        logger.info(
-          `[navigate] ${url} DONE via fetch status=${fetchResult.status} clean=${fetchResult.cleanText.length} total_ms=${Date.now() - overallStart}`,
-        );
-        return { cleanText: fetchResult.cleanText, status: fetchResult.status };
+        return {
+          resolved: true,
+          cleanText: fetchResult.cleanText,
+          status: fetchResult.status,
+          terminalVerdict: 'resolved',
+        };
       }
     }
   } else {
@@ -483,11 +564,10 @@ export async function navigateAndExtract(
 
   const rejectedUAs = new Set<string>();
   const maxAttempts = 3;
-  let lastStatus = 0;
-  let lastVerdict: NavOutcome['verdict'] = 'threw';
+  let lastCleanText = '';
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const result = await playwrightAttempt(url, analysis, attempt, rejectedUAs);
+      const result = await playwrightAttempt(url, analysis, attempt, rejectedUAs, useProxy);
       logAttempt(url, {
         phase: 'playwright',
         attempt,
@@ -500,27 +580,24 @@ export async function navigateAndExtract(
       });
       lastStatus = result.status;
       lastVerdict = result.verdict;
+      lastCleanText = result.cleanText;
 
       if (result.verdict === 'resolved') {
-        logger.info(
-          `[navigate] ${url} DONE via playwright attempt=${attempt} fp=${result.fp} status=${result.status} clean=${result.cleanText.length} total_ms=${Date.now() - overallStart}`,
-        );
-        return { cleanText: result.cleanText, status: result.status };
+        return {
+          resolved: true,
+          cleanText: result.cleanText,
+          status: result.status,
+          terminalVerdict: 'resolved',
+        };
       }
 
       if (attempt < maxAttempts) {
         const wait = jitter(1500, 3500);
-        logger.info(
-          `[navigate] ${url} retrying in ${wait}ms (reason=${result.verdict})`,
-        );
+        logger.info(`[navigate] ${url} retrying in ${wait}ms (reason=${result.verdict})`);
         await new Promise(r => setTimeout(r, wait));
         continue;
       }
-      // Last attempt, non-resolved: fall through to return
-      if (result.verdict === 'threw' && result.detail) {
-        throw new Error(result.detail);
-      }
-      return { cleanText: result.cleanText, status: result.status };
+      // Last attempt, non-resolved: fall through to return the verdict
     } catch (err: any) {
       logAttempt(url, {
         phase: 'playwright',
@@ -531,18 +608,27 @@ export async function navigateAndExtract(
         verdict: 'threw',
         detail: err?.message || String(err),
       });
+      lastVerdict = 'threw';
       if (attempt === maxAttempts) {
-        logger.warn(
-          `[navigate] ${url} EXHAUSTED last_status=${lastStatus} last_verdict=${lastVerdict} total_ms=${Date.now() - overallStart}`,
-        );
-        throw err;
+        return {
+          resolved: false,
+          cleanText: '',
+          status: 0,
+          terminalVerdict: 'threw',
+          thrown: err instanceof Error ? err : new Error(String(err)),
+        };
       }
       await new Promise(r => setTimeout(r, jitter(1500, 3500)));
     }
   }
 
   logger.warn(
-    `[navigate] ${url} EXHAUSTED last_status=${lastStatus} last_verdict=${lastVerdict} total_ms=${Date.now() - overallStart}`,
+    `[navigate] ${url} EXHAUSTED last_status=${lastStatus} last_verdict=${lastVerdict} useProxy=${useProxy}`,
   );
-  return { cleanText: '', status: lastStatus };
+  return {
+    resolved: false,
+    cleanText: lastCleanText,
+    status: lastStatus,
+    terminalVerdict: lastVerdict,
+  };
 }

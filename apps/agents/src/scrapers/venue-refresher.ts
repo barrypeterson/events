@@ -50,7 +50,16 @@ export async function refreshVenue(configId: string): Promise<ScraperStats> {
 
   try {
     // 1. Navigate and get clean text
-    const { cleanText, status } = await navigateAndExtract(null, config.sourceUrl, analysis);
+    const { cleanText, status } = await navigateAndExtract(null, config.sourceUrl, analysis, {
+      useProxy: config.requiresProxy,
+      onProxyEscalation: async () => {
+        logger.warn(`[refresh] ${config.sourceName}: marking requiresProxy=true (direct blocked, proxy succeeded)`);
+        await prisma.venueScraperConfig.update({
+          where: { id: configId },
+          data: { requiresProxy: true, proxyEscalatedAt: new Date() },
+        });
+      },
+    });
 
     if (status >= 400) {
       throw new Error(`Page returned ${status}`);

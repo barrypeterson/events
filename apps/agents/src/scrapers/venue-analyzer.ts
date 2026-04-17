@@ -22,7 +22,16 @@ export async function analyzeVenue(configId: string): Promise<PageAnalysis> {
 
   logger.info(`[analyze] Starting analysis of ${config.sourceName} (${config.sourceUrl})`);
 
-  const { cleanText, status } = await navigateAndExtract(null, config.sourceUrl);
+  const { cleanText, status } = await navigateAndExtract(null, config.sourceUrl, null, {
+    useProxy: config.requiresProxy,
+    onProxyEscalation: async () => {
+      logger.warn(`[analyze] ${config.sourceName}: marking requiresProxy=true (direct blocked, proxy succeeded)`);
+      await prisma.venueScraperConfig.update({
+        where: { id: configId },
+        data: { requiresProxy: true, proxyEscalatedAt: new Date() },
+      });
+    },
+  });
 
   if (status >= 400) {
     throw new Error(`Page returned ${status} for ${config.sourceUrl}`);

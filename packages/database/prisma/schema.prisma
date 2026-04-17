@@ -65,6 +65,8 @@ model VenueScraperConfig {
   lastRefreshStatus String?   @map("last_refresh_status") @db.VarChar(20)
   waitForSelector   String?   @map("wait_for_selector") @db.VarChar(255)
   requiresScrolling Boolean   @default(false) @map("requires_scrolling")
+  requiresProxy     Boolean   @default(false) @map("requires_proxy")
+  proxyEscalatedAt  DateTime? @map("proxy_escalated_at") @db.Timestamptz
   metadata          Json?
   createdAt         DateTime  @default(now()) @map("created_at")
   updatedAt         DateTime  @updatedAt @map("updated_at")

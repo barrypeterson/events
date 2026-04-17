@@ -59,6 +59,24 @@ export const venueScrapingRouter = router({
       });
     }),
 
+  /**
+   * Manually set or clear the proxy flag for a venue. Auto-escalation will
+   * flip it to true on block detection; this lets an admin pre-set it or
+   * reset after a transient block has cleared.
+   */
+  setRequiresProxy: publicProcedure
+    .input(z.object({ configId: z.string().uuid(), requiresProxy: z.boolean() }))
+    .mutation(async ({ input }) => {
+      const { prisma } = await import('@slo-events/database');
+      return prisma.venueScraperConfig.update({
+        where: { id: input.configId },
+        data: {
+          requiresProxy: input.requiresProxy,
+          proxyEscalatedAt: input.requiresProxy ? new Date() : null,
+        },
+      });
+    }),
+
   toggleScraping: publicProcedure
     .input(z.object({ configId: z.string().uuid(), enabled: z.boolean() }))
     .mutation(async ({ input }) => {
