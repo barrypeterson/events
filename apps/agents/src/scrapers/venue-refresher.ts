@@ -79,7 +79,10 @@ export async function refreshVenue(configId: string): Promise<ScraperStats> {
     const client = getOpenAI();
     const extractResponse = await client.chat.completions.create({
       model: config.refreshModel || 'gpt-4o-mini',
-      max_tokens: 4096,
+      // 8192 matches the analyzer validation cap — a full venue's event array
+      // can easily exceed 4k tokens, and truncation yields malformed JSON
+      // which our parser drops to raw=0.
+      max_tokens: 8192,
       messages: [
         { role: 'system', content: analysis.extractionPrompt },
         { role: 'user', content: `Extract all upcoming events from this page content. Image URLs appear as [IMAGE: url] markers near their associated event.\n\n${cleanText}` },
@@ -88,6 +91,8 @@ export async function refreshVenue(configId: string): Promise<ScraperStats> {
 
     const extractText = extractResponse.choices[0]?.message?.content || '[]';
     const extractTokens = extractResponse.usage?.total_tokens ?? 0;
+    const extractCompletionTokens = extractResponse.usage?.completion_tokens ?? 0;
+    const extractFinish = extractResponse.choices[0]?.finish_reason || 'unknown';
     let rawEvents: RawEvent[];
     let parseFailed = false;
     try {
@@ -121,7 +126,7 @@ export async function refreshVenue(configId: string): Promise<ScraperStats> {
     const withUrls = rawEvents.filter(e => e.url).length;
     const withDates = rawEvents.filter(e => e.rawDate).length;
     logger.info(
-      `[refresh] ${config.sourceName} extracted raw=${rawEvents.length} with_images=${withImages} with_urls=${withUrls} with_dates=${withDates} tokens=${extractTokens} ms=${Date.now() - extractStart} parse_failed=${parseFailed}`,
+      `[refresh] ${config.sourceName} extracted raw=${rawEvents.length} with_images=${withImages} with_urls=${withUrls} with_dates=${withDates} total_tokens=${extractTokens} completion_tokens=${extractCompletionTokens} finish=${extractFinish} ms=${Date.now() - extractStart} parse_failed=${parseFailed}`,
     );
 
     if (rawEvents.length === 0) {
