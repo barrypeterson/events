@@ -1,5 +1,5 @@
 import { chromium, Page, Browser } from 'playwright';
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import { BaseScraper } from './base';
 import { RawEvent } from '../types';
 import { logger } from '../lib/scraper-utils';
@@ -263,12 +263,12 @@ export class InstagramVisionScraper extends BaseScraper {
     imageData: { url: string; caption: string; postUrl: string }
   ): Promise<RawEvent | null> {
     try {
-      if (!process.env.ANTHROPIC_API_KEY) {
-        throw new Error('ANTHROPIC_API_KEY environment variable is required');
+      if (!process.env.OPENAI_API_KEY) {
+        throw new Error('OPENAI_API_KEY environment variable is required');
       }
 
-      const anthropic = new Anthropic({
-        apiKey: process.env.ANTHROPIC_API_KEY,
+      const openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
       });
 
       const prompt = `Analyze this image and extract event information if it's an event poster or announcement.
@@ -297,17 +297,16 @@ Instagram caption for context: "${imageData.caption.substring(0, 500)}"
 
 Return ONLY the JSON object, no other text.`;
 
-      const response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-5-20250929',
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o',
         max_tokens: 1024,
         messages: [
           {
             role: 'user',
             content: [
               {
-                type: 'image',
-                source: {
-                  type: 'url',
+                type: 'image_url',
+                image_url: {
                   url: imageData.url,
                 },
               },
@@ -320,13 +319,8 @@ Return ONLY the JSON object, no other text.`;
         ],
       });
 
-      const content = response.content[0];
-      if (content.type !== 'text') {
-        return null;
-      }
-
       // Parse JSON response
-      const jsonMatch = content.text.match(/\{[\s\S]*\}/);
+      const jsonMatch = (response.choices[0]?.message?.content || '').match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         logger.warn(`[${this.name}] No JSON found in Claude response`);
         return null;

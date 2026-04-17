@@ -1,5 +1,5 @@
 import { chromium } from 'playwright';
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import { BaseScraper } from './base';
 import { RawEvent } from '../types';
 import { logger } from '../lib/scraper-utils';
@@ -122,12 +122,12 @@ export class ImageCalendarScraper extends BaseScraper {
    */
   private async extractEventsFromImage(imageUrl: string): Promise<RawEvent[]> {
     try {
-      if (!process.env.ANTHROPIC_API_KEY) {
-        throw new Error('ANTHROPIC_API_KEY environment variable is required');
+      if (!process.env.OPENAI_API_KEY) {
+        throw new Error('OPENAI_API_KEY environment variable is required');
       }
 
-      const anthropic = new Anthropic({
-        apiKey: process.env.ANTHROPIC_API_KEY,
+      const openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
       });
 
       const prompt = `Analyze this music/event calendar image and extract ALL upcoming events/performances.
@@ -166,17 +166,16 @@ Return format:
 
 Analyze the image carefully and extract all events:`;
 
-      const response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-5-20250929',
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o',
         max_tokens: 4096,
         messages: [
           {
             role: 'user',
             content: [
               {
-                type: 'image',
-                source: {
-                  type: 'url',
+                type: 'image_url',
+                image_url: {
                   url: imageUrl,
                 },
               },
@@ -189,13 +188,8 @@ Analyze the image carefully and extract all events:`;
         ],
       });
 
-      const content = response.content[0];
-      if (content.type !== 'text') {
-        return [];
-      }
-
       // Parse JSON response
-      let cleanedResponse = content.text.trim();
+      let cleanedResponse = (response.choices[0]?.message?.content || '').trim();
       if (cleanedResponse.startsWith('```')) {
         cleanedResponse = cleanedResponse.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
       }

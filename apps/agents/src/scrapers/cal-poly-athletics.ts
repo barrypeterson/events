@@ -1,21 +1,21 @@
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import { chromium } from 'playwright';
 import { BaseScraper } from './base';
 import { RawEvent } from '../types';
 import { logger } from '../lib/scraper-utils';
 
-let anthropicInstance: Anthropic | null = null;
+let openaiInstance: OpenAI | null = null;
 
-function getAnthropic(): Anthropic {
-  if (!anthropicInstance) {
-    if (!process.env.ANTHROPIC_API_KEY) {
-      throw new Error('ANTHROPIC_API_KEY environment variable is required');
+function getOpenAI(): OpenAI {
+  if (!openaiInstance) {
+    if (!process.env.OPENAI_API_KEY) {
+      throw new Error('OPENAI_API_KEY environment variable is required');
     }
-    anthropicInstance = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY,
+    openaiInstance = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
     });
   }
-  return anthropicInstance;
+  return openaiInstance;
 }
 
 /**
@@ -100,8 +100,8 @@ export class CalPolyAthleticsScraper extends BaseScraper {
       // Truncate if too long
       const truncatedHtml = html.length > 150000 ? html.substring(0, 150000) + '...[truncated]' : html;
 
-      const message = await getAnthropic().messages.create({
-        model: 'claude-sonnet-4-5-20250929',
+      const completion = await getOpenAI().chat.completions.create({
+        model: 'gpt-4o-mini',
         max_tokens: 8192,
         messages: [{
           role: 'user',
@@ -153,7 +153,7 @@ ${truncatedHtml}`
         }]
       });
 
-      const responseText = message.content[0].type === 'text' ? message.content[0].text : '';
+      const responseText = completion.choices[0]?.message?.content || '';
 
       // Clean up response
       let cleanedResponse = responseText.trim();

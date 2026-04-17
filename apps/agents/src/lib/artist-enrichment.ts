@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import { logger } from './scraper-utils';
 
 /**
@@ -22,18 +22,18 @@ interface ArtistInfo {
   youtubeChannelId?: string;
 }
 
-let anthropicInstance: Anthropic | null = null;
+let openaiInstance: OpenAI | null = null;
 
-function getAnthropic(): Anthropic {
-  if (!anthropicInstance) {
-    if (!process.env.ANTHROPIC_API_KEY) {
-      throw new Error('ANTHROPIC_API_KEY environment variable is required');
+function getOpenAI(): OpenAI {
+  if (!openaiInstance) {
+    if (!process.env.OPENAI_API_KEY) {
+      throw new Error('OPENAI_API_KEY environment variable is required');
     }
-    anthropicInstance = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY,
+    openaiInstance = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
     });
   }
-  return anthropicInstance;
+  return openaiInstance;
 }
 
 /**
@@ -48,8 +48,8 @@ export async function extractArtistName(eventTitle: string, eventDescription?: s
   try {
     const tagsContext = tags ? `Tags: ${tags.join(', ')}` : '';
 
-    const message = await getAnthropic().messages.create({
-      model: 'claude-sonnet-4-5-20250929',
+    const completion = await getOpenAI().chat.completions.create({
+      model: 'gpt-4o-mini',
       max_tokens: 512,
       messages: [{
         role: 'user',
@@ -98,13 +98,10 @@ Return ONLY the JSON object:`
       }]
     });
 
-    const content = message.content[0];
-    if (content.type !== 'text') {
-      return { artistName: null, isCoverBand: false };
-    }
+    const responseText = completion.choices[0]?.message?.content || '';
 
     // Parse JSON response
-    const jsonMatch = content.text.match(/\{[\s\S]*\}/);
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       logger.warn(`No JSON found in artist extraction response`);
       return { artistName: null, isCoverBand: false };
