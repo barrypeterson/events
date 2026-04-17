@@ -84,14 +84,20 @@ export async function analyzeVenue(configId: string): Promise<PageAnalysis> {
     const passed = candidate.sampleEventCount === 0 || extractedCount >= minExpected;
 
     logger.info(
-      `[analyze] ${config.sourceName} attempt=${attempt} validation=${extractedCount} min=${minExpected} tokens=${validation.tokens} passed=${passed}`,
+      `[analyze] ${config.sourceName} attempt=${attempt} validation=${extractedCount} min=${minExpected} prompt_tokens=${validation.promptTokens} completion_tokens=${validation.completionTokens} finish=${validation.finishReason} response_chars=${validation.rawText.length} parseError=${validation.parseError ?? 'none'} passed=${passed}`,
     );
 
-    // ALWAYS log the raw LLM response (first 2000 chars) so we can see what
-    // gpt-4o-mini actually said — [], refusal, wrong-shape JSON, truncated output…
+    // Log BOTH the head and tail of the response so truncated outputs are
+    // visible from both sides. The tail is critical for detecting
+    // finish_reason=length (ran out of tokens mid-object).
     logger.info(
-      `[analyze] ${config.sourceName} attempt=${attempt} validation_response="${validation.rawText.slice(0, 2000)}"`,
+      `[analyze] ${config.sourceName} attempt=${attempt} validation_response_head="${validation.rawText.slice(0, 3000)}"`,
     );
+    if (validation.rawText.length > 3000) {
+      logger.info(
+        `[analyze] ${config.sourceName} attempt=${attempt} validation_response_tail="${validation.rawText.slice(-2000)}"`,
+      );
+    }
 
     if (passed) {
       analysis = candidate;
@@ -201,24 +207,38 @@ async function runValidation(
   client: OpenAI,
   extractionPrompt: string,
   cleanText: string,
-): Promise<{ count: number; rawText: string; tokens: number; parseError?: string }> {
+): Promise<{
+  count: number;
+  rawText: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  finishReason: string;
+  parseError?: string;
+}> {
   const response = await client.chat.completions.create({
     model: 'gpt-4o-mini',
-    max_tokens: 4096,
+    // Bumped from 4096: if the prior cap was the problem, 8192 gives 2x head-
+    // room for ~40 events (each JSON object is ~100-150 tokens with our schema).
+    max_tokens: 8192,
     messages: [
       { role: 'system', content: extractionPrompt },
       { role: 'user', content: `Extract all upcoming events from this page content:\n\n${cleanText}` },
     ],
   });
   const rawText = response.choices[0]?.message?.content || '';
-  const tokens = response.usage?.total_tokens ?? 0;
+  const promptTokens = response.usage?.prompt_tokens ?? 0;
+  const completionTokens = response.usage?.completion_tokens ?? 0;
+  const totalTokens = response.usage?.total_tokens ?? 0;
+  const finishReason = response.choices[0]?.finish_reason || 'unknown';
+  const base = { rawText, promptTokens, completionTokens, totalTokens, finishReason };
   try {
     const match = rawText.match(/\[[\s\S]*\]/);
-    if (!match) return { count: 0, rawText, tokens, parseError: 'no-json-array-found' };
+    if (!match) return { ...base, count: 0, parseError: 'no-json-array-found' };
     const arr = JSON.parse(match[0]);
-    if (!Array.isArray(arr)) return { count: 0, rawText, tokens, parseError: 'not-an-array' };
-    return { count: arr.length, rawText, tokens };
+    if (!Array.isArray(arr)) return { ...base, count: 0, parseError: 'not-an-array' };
+    return { ...base, count: arr.length };
   } catch (err: any) {
-    return { count: 0, rawText, tokens, parseError: err?.message || 'json-parse-failed' };
+    return { ...base, count: 0, parseError: err?.message || 'json-parse-failed' };
   }
 }
