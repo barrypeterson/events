@@ -48,6 +48,11 @@ export async function analyzeVenue(configId: string): Promise<PageAnalysis> {
   }
 
   logger.info(`[analyze] ${config.sourceName}: ${cleanText.length} chars clean text, status ${status}`);
+  // Log the head of cleanText so we can confirm the model is being fed the
+  // same event-block format we see locally, not something mangled by proxy
+  // / encoding / compression differences on Railway.
+  const cleanHead = cleanText.slice(0, 1500).replace(/\s+/g, ' ');
+  logger.info(`[analyze] ${config.sourceName} clean_text_head="${cleanHead}"`);
 
   const client = getOpenAI();
   const previousFailures: Array<{ prompt: string; extracted: number; expected: number }> = [];
@@ -64,12 +69,28 @@ export async function analyzeVenue(configId: string): Promise<PageAnalysis> {
       attempt,
     );
 
-    const extractedCount = await runValidation(client, candidate.extractionPrompt, cleanText);
+    // Log the FULL generated prompt (truncated at 2000 chars) so we can
+    // inspect exactly what gpt-4o produced, not just the first ~200.
+    logger.info(
+      `[analyze] ${config.sourceName} attempt=${attempt} generated_prompt_len=${candidate.extractionPrompt.length} pageType=${candidate.pageType} samples=${candidate.sampleEventCount}`,
+    );
+    logger.info(
+      `[analyze] ${config.sourceName} attempt=${attempt} generated_prompt="${candidate.extractionPrompt.slice(0, 2000)}"`,
+    );
+
+    const validation = await runValidation(client, candidate.extractionPrompt, cleanText);
+    const extractedCount = validation.count;
     const minExpected = Math.max(1, Math.floor(candidate.sampleEventCount * 0.5));
     const passed = candidate.sampleEventCount === 0 || extractedCount >= minExpected;
 
     logger.info(
-      `[analyze] ${config.sourceName} attempt=${attempt} samples=${candidate.sampleEventCount} validation=${extractedCount} min=${minExpected} passed=${passed}`,
+      `[analyze] ${config.sourceName} attempt=${attempt} validation=${extractedCount} min=${minExpected} tokens=${validation.tokens} passed=${passed}`,
+    );
+
+    // ALWAYS log the raw LLM response (first 2000 chars) so we can see what
+    // gpt-4o-mini actually said — [], refusal, wrong-shape JSON, truncated output…
+    logger.info(
+      `[analyze] ${config.sourceName} attempt=${attempt} validation_response="${validation.rawText.slice(0, 2000)}"`,
     );
 
     if (passed) {
@@ -85,7 +106,7 @@ export async function analyzeVenue(configId: string): Promise<PageAnalysis> {
     });
 
     logger.warn(
-      `[analyze] ${config.sourceName} attempt=${attempt} REJECTED — extracted ${extractedCount}/${candidate.sampleEventCount}. Prompt preview: "${candidate.extractionPrompt.slice(0, 200)}"`,
+      `[analyze] ${config.sourceName} attempt=${attempt} REJECTED — extracted ${extractedCount}/${candidate.sampleEventCount}`,
     );
   }
 
@@ -180,7 +201,7 @@ async function runValidation(
   client: OpenAI,
   extractionPrompt: string,
   cleanText: string,
-): Promise<number> {
+): Promise<{ count: number; rawText: string; tokens: number; parseError?: string }> {
   const response = await client.chat.completions.create({
     model: 'gpt-4o-mini',
     max_tokens: 4096,
@@ -189,12 +210,15 @@ async function runValidation(
       { role: 'user', content: `Extract all upcoming events from this page content:\n\n${cleanText}` },
     ],
   });
-  const text = response.choices[0]?.message?.content || '[]';
+  const rawText = response.choices[0]?.message?.content || '';
+  const tokens = response.usage?.total_tokens ?? 0;
   try {
-    const match = text.match(/\[[\s\S]*\]/);
-    const arr = match ? JSON.parse(match[0]) : [];
-    return Array.isArray(arr) ? arr.length : 0;
-  } catch {
-    return 0;
+    const match = rawText.match(/\[[\s\S]*\]/);
+    if (!match) return { count: 0, rawText, tokens, parseError: 'no-json-array-found' };
+    const arr = JSON.parse(match[0]);
+    if (!Array.isArray(arr)) return { count: 0, rawText, tokens, parseError: 'not-an-array' };
+    return { count: arr.length, rawText, tokens };
+  } catch (err: any) {
+    return { count: 0, rawText, tokens, parseError: err?.message || 'json-parse-failed' };
   }
 }
