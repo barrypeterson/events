@@ -143,18 +143,69 @@ async function autoScroll(page: Page): Promise<void> {
 
 const BLOCK_STATUSES = new Set([401, 403, 406, 409, 418, 429, 451, 503]);
 const MIN_USEFUL_HTML = 2000;
+const MIN_USEFUL_CLEAN = 200;
+
+/**
+ * Short identifier for a fingerprint used in log lines. The full UA string is
+ * 120+ chars of noise in logs; `macOS/Chrome131` is enough to tell them apart.
+ */
+function fpId(fp: { userAgent: string; platform: string }): string {
+  const version = fp.userAgent.match(/Chrome\/(\d+)/)?.[1] ?? '?';
+  return `${fp.platform}/Chrome${version}`;
+}
+
+interface NavOutcome {
+  phase: 'fetch' | 'playwright';
+  attempt: number;
+  status: number;
+  cleanLen: number;
+  elapsedMs: number;
+  verdict: 'resolved' | 'blocked' | 'thin' | 'threw' | 'skipped-spa' | 'http-error';
+  detail?: string;
+  fingerprint?: string;
+}
+
+function logAttempt(url: string, outcome: NavOutcome): void {
+  const line = [
+    `[navigate]`,
+    url,
+    `phase=${outcome.phase}`,
+    `attempt=${outcome.attempt}`,
+    outcome.fingerprint ? `fp=${outcome.fingerprint}` : null,
+    `status=${outcome.status || '-'}`,
+    `clean=${outcome.cleanLen}`,
+    `ms=${outcome.elapsedMs}`,
+    `verdict=${outcome.verdict}`,
+    outcome.detail ? `detail="${outcome.detail}"` : null,
+  ]
+    .filter(Boolean)
+    .join(' ');
+  if (outcome.verdict === 'resolved') {
+    logger.info(line);
+  } else if (outcome.verdict === 'threw' || outcome.verdict === 'blocked') {
+    logger.warn(line);
+  } else {
+    logger.info(line);
+  }
+}
 
 /**
  * Run the page HTML through the same cleaning walk as getCleanPageTextWithImages,
  * but in Node (cheerio-free, regex-light). Works for static pages we can fetch
  * directly without a browser — which is the hardest case for bot detection
  * because there's no Chromium fingerprint at all.
+ *
+ * Returns `null` only when the response looks like a JS-rendered shell we can't
+ * handle here (caller should fall through to Playwright). For all other outcomes
+ * returns an object so the caller can log the status code it saw.
  */
 async function fetchAndClean(
   url: string,
   attempt: number,
-): Promise<{ cleanText: string; status: number } | null> {
+): Promise<{ cleanText: string; status: number; fp: string; elapsedMs: number; verdict: NavOutcome['verdict']; detail?: string } | null> {
   const fp = pickFingerprintExcept(new Set());
+  const fpLabel = fpId(fp);
+  const start = Date.now();
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
@@ -165,27 +216,52 @@ async function fetchAndClean(
     });
     clearTimeout(timeout);
     const status = res.status;
+    const elapsedMs = Date.now() - start;
     if (!res.ok) {
-      logger.info(`[fetch-first] ${url} status=${status} attempt=${attempt}`);
-      return { cleanText: '', status };
+      return {
+        cleanText: '',
+        status,
+        fp: fpLabel,
+        elapsedMs,
+        verdict: BLOCK_STATUSES.has(status) ? 'blocked' : 'http-error',
+      };
     }
     const html = await res.text();
-    if (html.length < MIN_USEFUL_HTML) return { cleanText: '', status };
+    if (html.length < MIN_USEFUL_HTML) {
+      return {
+        cleanText: '',
+        status,
+        fp: fpLabel,
+        elapsedMs: Date.now() - start,
+        verdict: 'thin',
+        detail: `html=${html.length}b`,
+      };
+    }
 
     // If the response is almost all <script> (SPA shell), don't try to clean it
     // here — the browser path is needed to run the JS.
     const scriptRatio = (html.match(/<script/gi)?.length ?? 0) * 500 / html.length;
     if (scriptRatio > 0.4 && !/<article|<main|<section|<h[1-3]/i.test(html)) {
-      logger.info(`[fetch-first] ${url} looks JS-rendered, skipping fetch path`);
       return null;
     }
 
     const cleanText = cleanHtmlString(html, url);
-    if (cleanText.length < 200) return null;
-    return { cleanText, status };
+    const totalMs = Date.now() - start;
+    if (cleanText.length < MIN_USEFUL_CLEAN) {
+      return { cleanText, status, fp: fpLabel, elapsedMs: totalMs, verdict: 'thin' };
+    }
+    return { cleanText, status, fp: fpLabel, elapsedMs: totalMs, verdict: 'resolved' };
   } catch (err: any) {
-    logger.info(`[fetch-first] ${url} failed: ${err?.message || err}`);
-    return null;
+    return {
+      cleanText: '',
+      status: 0,
+      fp: fpLabel,
+      elapsedMs: Date.now() - start,
+      verdict: 'threw',
+      detail: err?.message || String(err),
+    };
+  } finally {
+    void attempt;
   }
 }
 
@@ -286,9 +362,11 @@ async function playwrightAttempt(
   analysis: PageAnalysis | null | undefined,
   attempt: number,
   rejectedUAs: Set<string>,
-): Promise<{ cleanText: string; status: number }> {
+): Promise<{ cleanText: string; status: number; fp: string; elapsedMs: number; verdict: NavOutcome['verdict']; detail?: string }> {
   const fp = pickFingerprintExcept(rejectedUAs);
   rejectedUAs.add(fp.userAgent);
+  const fpLabel = fpId(fp);
+  const start = Date.now();
   const context = await browserPool.createContext(undefined, fp);
   const page = await context.newPage();
   try {
@@ -305,13 +383,35 @@ async function playwrightAttempt(
     });
     const status = response?.status() || 0;
     if (status && status >= 400) {
-      return { cleanText: '', status };
+      return {
+        cleanText: '',
+        status,
+        fp: fpLabel,
+        elapsedMs: Date.now() - start,
+        verdict: BLOCK_STATUSES.has(status) ? 'blocked' : 'http-error',
+      };
     }
 
     await humanDelay(page, 200, 700);
     await waitForContent(page, analysis);
     const cleanText = await getCleanPageTextWithImages(page);
-    return { cleanText, status };
+    const elapsedMs = Date.now() - start;
+    return {
+      cleanText,
+      status,
+      fp: fpLabel,
+      elapsedMs,
+      verdict: cleanText.length >= MIN_USEFUL_CLEAN ? 'resolved' : 'thin',
+    };
+  } catch (err: any) {
+    return {
+      cleanText: '',
+      status: 0,
+      fp: fpLabel,
+      elapsedMs: Date.now() - start,
+      verdict: 'threw',
+      detail: err?.message || String(err),
+    };
   } finally {
     await context.close().catch(() => undefined);
   }
@@ -335,43 +435,109 @@ export async function navigateAndExtract(
 ): Promise<{ cleanText: string; status: number }> {
   void pageOrUnused; // retained in signature for caller compatibility
 
+  const overallStart = Date.now();
   const pageType = analysis?.pageType;
   const canFetch = pageType === 'static' || pageType === undefined || pageType === null;
 
+  logger.info(
+    `[navigate] ${url} start pageType=${pageType ?? 'unknown'} canFetch=${canFetch}`,
+  );
+
   if (canFetch) {
     const fetchResult = await fetchAndClean(url, 1);
-    if (fetchResult && fetchResult.cleanText.length >= 200 && fetchResult.status < 400) {
-      logger.info(`[navigate] ${url} resolved via fetch (${fetchResult.cleanText.length} chars)`);
-      return fetchResult;
+    if (fetchResult === null) {
+      logAttempt(url, {
+        phase: 'fetch',
+        attempt: 1,
+        status: 0,
+        cleanLen: 0,
+        elapsedMs: 0,
+        verdict: 'skipped-spa',
+      });
+    } else {
+      logAttempt(url, {
+        phase: 'fetch',
+        attempt: 1,
+        status: fetchResult.status,
+        cleanLen: fetchResult.cleanText.length,
+        elapsedMs: fetchResult.elapsedMs,
+        verdict: fetchResult.verdict,
+        detail: fetchResult.detail,
+        fingerprint: fetchResult.fp,
+      });
+      if (fetchResult.verdict === 'resolved') {
+        logger.info(
+          `[navigate] ${url} DONE via fetch status=${fetchResult.status} clean=${fetchResult.cleanText.length} total_ms=${Date.now() - overallStart}`,
+        );
+        return { cleanText: fetchResult.cleanText, status: fetchResult.status };
+      }
     }
+  } else {
+    logger.info(`[navigate] ${url} fetch path skipped (pageType=${pageType})`);
   }
 
   const rejectedUAs = new Set<string>();
   const maxAttempts = 3;
   let lastStatus = 0;
+  let lastVerdict: NavOutcome['verdict'] = 'threw';
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const result = await playwrightAttempt(url, analysis, attempt, rejectedUAs);
-      if (result.status && BLOCK_STATUSES.has(result.status) && attempt < maxAttempts) {
-        lastStatus = result.status;
-        logger.warn(`[navigate] ${url} blocked with ${result.status} on attempt ${attempt}, rotating fingerprint`);
-        await new Promise(r => setTimeout(r, jitter(1500, 3500)));
+      logAttempt(url, {
+        phase: 'playwright',
+        attempt,
+        status: result.status,
+        cleanLen: result.cleanText.length,
+        elapsedMs: result.elapsedMs,
+        verdict: result.verdict,
+        detail: result.detail,
+        fingerprint: result.fp,
+      });
+      lastStatus = result.status;
+      lastVerdict = result.verdict;
+
+      if (result.verdict === 'resolved') {
+        logger.info(
+          `[navigate] ${url} DONE via playwright attempt=${attempt} fp=${result.fp} status=${result.status} clean=${result.cleanText.length} total_ms=${Date.now() - overallStart}`,
+        );
+        return { cleanText: result.cleanText, status: result.status };
+      }
+
+      if (attempt < maxAttempts) {
+        const wait = jitter(1500, 3500);
+        logger.info(
+          `[navigate] ${url} retrying in ${wait}ms (reason=${result.verdict})`,
+        );
+        await new Promise(r => setTimeout(r, wait));
         continue;
       }
-      if (result.cleanText.length < 200 && attempt < maxAttempts) {
-        logger.warn(`[navigate] ${url} returned thin content (${result.cleanText.length} chars), retrying`);
-        lastStatus = result.status;
-        await new Promise(r => setTimeout(r, jitter(1500, 3500)));
-        continue;
+      // Last attempt, non-resolved: fall through to return
+      if (result.verdict === 'threw' && result.detail) {
+        throw new Error(result.detail);
       }
-      return result;
+      return { cleanText: result.cleanText, status: result.status };
     } catch (err: any) {
-      lastStatus = 0;
-      logger.warn(`[navigate] ${url} attempt ${attempt} threw: ${err?.message || err}`);
-      if (attempt === maxAttempts) throw err;
+      logAttempt(url, {
+        phase: 'playwright',
+        attempt,
+        status: 0,
+        cleanLen: 0,
+        elapsedMs: 0,
+        verdict: 'threw',
+        detail: err?.message || String(err),
+      });
+      if (attempt === maxAttempts) {
+        logger.warn(
+          `[navigate] ${url} EXHAUSTED last_status=${lastStatus} last_verdict=${lastVerdict} total_ms=${Date.now() - overallStart}`,
+        );
+        throw err;
+      }
       await new Promise(r => setTimeout(r, jitter(1500, 3500)));
     }
   }
 
+  logger.warn(
+    `[navigate] ${url} EXHAUSTED last_status=${lastStatus} last_verdict=${lastVerdict} total_ms=${Date.now() - overallStart}`,
+  );
   return { cleanText: '', status: lastStatus };
 }
