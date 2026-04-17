@@ -4,6 +4,7 @@ import { logger } from './scraper-utils';
 import { browserPool } from './browser-pool';
 import { pickFingerprintExcept, fetchHeaders } from './stealth-fingerprints';
 import { humanScroll, humanDelay, jitter } from './human-timing';
+import { fetchDispatcher } from './proxy';
 
 /**
  * Extract clean visible text from a rendered page.
@@ -209,10 +210,14 @@ async function fetchAndClean(
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
+    const dispatcher = fetchDispatcher();
     const res = await fetch(url, {
       headers: fetchHeaders(fp),
       redirect: 'follow',
       signal: controller.signal,
+      // `dispatcher` is an undici option not in the standard fetch type, but
+      // Node 20's fetch is undici under the hood and honours it.
+      ...(dispatcher ? ({ dispatcher } as any) : {}),
     });
     clearTimeout(timeout);
     const status = res.status;

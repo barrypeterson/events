@@ -6,6 +6,7 @@ import { chromium as chromiumExtra } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { logger } from './scraper-utils';
 import { pickFingerprint, type Fingerprint } from './stealth-fingerprints';
+import { playwrightProxy } from './proxy';
 
 // Stealth plugin patches ~20 fingerprinting surfaces (webdriver, chrome.runtime,
 // plugins, WebGL vendor, iframe.contentWindow, permissions, media codecs, etc.).
@@ -40,7 +41,7 @@ const POST_STEALTH_INIT = `
 `;
 
 function contextOptionsFromFingerprint(fp: Fingerprint): BrowserContextOptions {
-  return {
+  const options: BrowserContextOptions = {
     viewport: fp.viewport,
     userAgent: fp.userAgent,
     locale: fp.locale,
@@ -54,6 +55,9 @@ function contextOptionsFromFingerprint(fp: Fingerprint): BrowserContextOptions {
       'Accept-Language': 'en-US,en;q=0.9',
     },
   };
+  const proxy = playwrightProxy();
+  if (proxy) options.proxy = proxy;
+  return options;
 }
 
 class BrowserPool {
