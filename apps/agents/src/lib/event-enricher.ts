@@ -24,43 +24,51 @@ If the page doesn't contain meaningful event details, return: {"description": nu
  * Extracts description, door time, age restriction, lineup, and ticket URL.
  */
 export async function enrichEventDetails(eventId: string): Promise<boolean> {
+  const start = Date.now();
   const event = await prisma.event.findUnique({
     where: { id: eventId },
     select: { id: true, title: true, ticketUrl: true, description: true, metadata: true },
   });
 
   if (!event) {
-    logger.warn(`[enrich] Event ${eventId} not found`);
+    logger.warn(`[enrich] event_id=${eventId} SKIP reason=not_found`);
     return false;
   }
 
+  const titleShort = (event.title || '').slice(0, 60);
+
   if (!event.ticketUrl) {
-    logger.debug(`[enrich] ${event.title}: no URL to visit`);
+    logger.debug(`[enrich] event_id=${eventId} SKIP reason=no_url title="${titleShort}"`);
     return false;
   }
 
   const meta = (event.metadata as any) || {};
   if (meta.enrichedAt) {
-    logger.debug(`[enrich] ${event.title}: already enriched`);
+    logger.debug(`[enrich] event_id=${eventId} SKIP reason=already_enriched title="${titleShort}"`);
     return false;
   }
 
-  logger.info(`[enrich] Visiting detail page for: ${event.title}`);
+  logger.info(`[enrich] event_id=${eventId} START url=${event.ticketUrl} title="${titleShort}"`);
 
   try {
     const { cleanText, status } = await navigateAndExtract(null, event.ticketUrl);
 
     if (status >= 400) {
-      logger.warn(`[enrich] ${event.title}: page returned ${status}`);
+      logger.warn(
+        `[enrich] event_id=${eventId} ABORT reason=http_status status=${status} ms=${Date.now() - start}`,
+      );
       return false;
     }
 
     if (cleanText.length < 50) {
-      logger.warn(`[enrich] ${event.title}: page has no meaningful content`);
+      logger.warn(
+        `[enrich] event_id=${eventId} ABORT reason=thin_content clean=${cleanText.length} ms=${Date.now() - start}`,
+      );
       return false;
     }
 
     // Send to LLM for extraction
+    const llmStart = Date.now();
     const client = getOpenAI();
     const resp = await client.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -72,17 +80,22 @@ export async function enrichEventDetails(eventId: string): Promise<boolean> {
     });
 
     const responseText = resp.choices[0]?.message?.content || '';
+    const llmTokens = resp.usage?.total_tokens ?? 0;
     let details: any;
     try {
       const match = responseText.match(/\{[\s\S]*\}/);
       details = match ? JSON.parse(match[0]) : null;
-    } catch {
-      logger.warn(`[enrich] ${event.title}: failed to parse LLM response`);
+    } catch (err: any) {
+      logger.warn(
+        `[enrich] event_id=${eventId} ABORT reason=parse_failed tokens=${llmTokens} llm_ms=${Date.now() - llmStart} error="${err?.message || err}"`,
+      );
       return false;
     }
 
     if (!details || !details.description) {
-      logger.warn(`[enrich] ${event.title}: LLM returned no description`);
+      logger.warn(
+        `[enrich] event_id=${eventId} ABORT reason=no_description tokens=${llmTokens} llm_ms=${Date.now() - llmStart}`,
+      );
       return false;
     }
 
@@ -104,11 +117,15 @@ export async function enrichEventDetails(eventId: string): Promise<boolean> {
       },
     });
 
-    logger.info(`[enrich] ${event.title}: enriched successfully`);
+    logger.info(
+      `[enrich] event_id=${eventId} DONE desc_len=${details.description.length} lineup=${(details.lineup || []).length} door_time=${details.doorTime ? 'yes' : 'no'} age=${details.ageRestriction ? 'yes' : 'no'} tokens=${llmTokens} total_ms=${Date.now() - start}`,
+    );
     return true;
 
   } catch (err: any) {
-    logger.error(`[enrich] ${event.title}: failed: ${err.message}`);
+    logger.error(
+      `[enrich] event_id=${eventId} FAILED ms=${Date.now() - start} error="${err?.message || err}"`,
+    );
     return false;
   }
 }
@@ -133,7 +150,8 @@ export async function enrichUnenrichedEvents(limit: number = 50): Promise<{ enri
     LIMIT ${limit}
   `;
 
-  logger.info(`[enrich] Found ${events.length} events to enrich`);
+  const batchStart = Date.now();
+  logger.info(`[enrich] BATCH_START candidates=${events.length} limit=${limit}`);
 
   let enriched = 0;
   let failed = 0;
@@ -148,7 +166,7 @@ export async function enrichUnenrichedEvents(limit: number = 50): Promise<{ enri
         skipped++;
       }
     } catch (err: any) {
-      logger.error(`[enrich] ${event.title}: ${err.message}`);
+      logger.error(`[enrich] event_id=${event.id} THREW error="${err?.message || err}"`);
       failed++;
     }
 
@@ -156,6 +174,8 @@ export async function enrichUnenrichedEvents(limit: number = 50): Promise<{ enri
     await new Promise(resolve => setTimeout(resolve, 3000));
   }
 
-  logger.info(`[enrich] Done: ${enriched} enriched, ${failed} failed, ${skipped} skipped`);
+  logger.info(
+    `[enrich] BATCH_DONE enriched=${enriched} failed=${failed} skipped=${skipped} total=${events.length} duration_s=${((Date.now() - batchStart) / 1000).toFixed(1)}`,
+  );
   return { enriched, failed, skipped };
 }

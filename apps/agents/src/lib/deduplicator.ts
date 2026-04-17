@@ -65,6 +65,7 @@ export async function deduplicateEvent(
           eventId: existingInSeries.id,
           similarityScore: 1.0,
           action: 'update',
+          matchPath: 'recurring',
         };
       }
     }
@@ -101,6 +102,7 @@ export async function deduplicateEvent(
           eventId: canonicalId,
           similarityScore: 1.0,
           action: 'update',
+          matchPath: 'merged-canonical',
         };
       }
 
@@ -133,6 +135,7 @@ export async function deduplicateEvent(
         eventId: existing.id,
         similarityScore: 1.0,
         action: 'update',
+        matchPath: 'exact-time',
       };
     }
 
@@ -219,6 +222,7 @@ export async function deduplicateEvent(
         eventId: existing.id,
         similarityScore: 1.0,
         action: 'update',
+        matchPath: 'cross-venue',
       };
     }
 
@@ -275,6 +279,7 @@ export async function deduplicateEvent(
           eventId: existing.id,
           similarityScore: 0.9,
           action: 'update',
+          matchPath: 'core-words',
         };
       }
     }
@@ -330,6 +335,7 @@ export async function deduplicateEvent(
         eventId: existing.id,
         similarityScore: 1.0,
         action: 'update',
+        matchPath: 'fuzzy-title',
       };
     }
 
@@ -350,6 +356,7 @@ export async function deduplicateEvent(
         isDuplicate: false,
         eventId: created.id,
         action: 'create',
+        matchPath: 'new',
       };
     }
 
@@ -371,6 +378,7 @@ export async function deduplicateEvent(
         eventId: best.id,
         similarityScore,
         action: 'merge',
+        matchPath: 'vector-similarity',
       };
     }
 
@@ -383,6 +391,7 @@ export async function deduplicateEvent(
       isDuplicate: false,
       eventId: created.id,
       action: 'create',
+      matchPath: 'new',
     };
   } catch (error: any) {
     logger.error(`Deduplication failed for ${event.title}: ${error.message}`);

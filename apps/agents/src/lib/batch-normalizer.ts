@@ -66,16 +66,16 @@ ${JSON.stringify(eventsJson, null, 2)}`;
     const responseText = response.choices[0]?.message?.content || '[]';
     const match = responseText.match(/\[[\s\S]*\]/);
     if (!match) {
-      logger.error(`[batch-normalize] No JSON array in response`);
+      logger.error(
+        `[normalize] source=${sourceName} ABORT reason=no_json_array response_preview="${responseText.slice(0, 200)}"`,
+      );
       return [];
     }
 
     const normalized: any[] = JSON.parse(match[0]);
+    const tokens = response.usage?.total_tokens ?? 0;
 
-    logger.info(`[batch-normalize] Normalized ${normalized.length} events in 1 LLM call (${response.usage?.total_tokens || '?'} tokens)`);
-
-    // Map to NormalizedEvent objects
-    return normalized.map((n: any, i: number) => {
+    const mapped = normalized.map((n: any, i: number) => {
       const raw = rawEvents[i] || rawEvents[0];
       return {
         title: cleanText(n.title || raw.title),
@@ -100,18 +100,28 @@ ${JSON.stringify(eventsJson, null, 2)}`;
           normalized: n,
         },
       };
-    }).filter((e: NormalizedEvent) => {
-      // Filter out events with invalid dates
+    });
+
+    const withValidDates = mapped.filter((e: NormalizedEvent) => {
       if (isNaN(e.startDateTime.getTime())) {
-        logger.warn(`[batch-normalize] Skipping event with invalid date: ${e.title}`);
+        logger.warn(
+          `[normalize] DROP reason=invalid_date source=${sourceName} title="${(e.title || '').slice(0, 60)}" raw_date="${(e.rawData as any)?.original?.rawDate ?? '-'}"`,
+        );
         return false;
       }
       return true;
     });
 
+    logger.info(
+      `[normalize] source=${sourceName} llm_returned=${normalized.length} mapped=${mapped.length} valid_dates=${withValidDates.length} tokens=${tokens}`,
+    );
+    return withValidDates;
+
   } catch (err: any) {
-    logger.error(`[batch-normalize] Failed: ${err.message}`);
-    logger.error(`[batch-normalize] Stack: ${err.stack}`);
+    logger.error(
+      `[normalize] source=${sourceName} THREW error="${err?.message || err}"`,
+    );
+    if (err?.stack) logger.error(`[normalize] stack=${err.stack}`);
     return [];
   }
 }

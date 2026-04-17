@@ -39,6 +39,10 @@ export async function refreshVenue(configId: string): Promise<ScraperStats> {
   };
   const startTime = Date.now();
 
+  logger.info(
+    `[refresh] ${config.sourceName} START url=${config.sourceUrl} requiresProxy=${config.requiresProxy} model=${config.refreshModel}`,
+  );
+
   // Track scraper run
   const scraperRun = await prisma.scraperRun.create({
     data: {
@@ -65,10 +69,13 @@ export async function refreshVenue(configId: string): Promise<ScraperStats> {
       throw new Error(`Page returned ${status}`);
     }
 
-    logger.info(`[refresh] ${config.sourceName}: ${cleanText.length} chars, status ${status}`);
+    logger.info(
+      `[refresh] ${config.sourceName} navigated clean=${cleanText.length} status=${status}`,
+    );
 
     // 2. Extract events using stored prompt + gpt-4o-mini
     // The clean text now contains [IMAGE: url] markers inline with content
+    const extractStart = Date.now();
     const client = getOpenAI();
     const extractResponse = await client.chat.completions.create({
       model: config.refreshModel || 'gpt-4o-mini',
@@ -80,7 +87,9 @@ export async function refreshVenue(configId: string): Promise<ScraperStats> {
     });
 
     const extractText = extractResponse.choices[0]?.message?.content || '[]';
+    const extractTokens = extractResponse.usage?.total_tokens ?? 0;
     let rawEvents: RawEvent[];
+    let parseFailed = false;
     try {
       const match = extractText.match(/\[[\s\S]*\]/);
       const parsed = match ? JSON.parse(match[0]) : [];
@@ -99,48 +108,69 @@ export async function refreshVenue(configId: string): Promise<ScraperStats> {
           extractionMethod: 'playwright-refresh',
         },
       }));
-    } catch {
-      logger.error(`[refresh] ${config.sourceName}: failed to parse extraction response`);
+    } catch (err: any) {
+      parseFailed = true;
+      logger.error(
+        `[refresh] ${config.sourceName} extract parse_failed error="${err?.message || err}" response_preview="${extractText.slice(0, 200)}"`,
+      );
       rawEvents = [];
     }
 
     stats.eventsFound = rawEvents.length;
     const withImages = rawEvents.filter(e => e.imageUrl).length;
-    logger.info(`[refresh] ${config.sourceName}: ${withImages}/${rawEvents.length} events have images`);
-    logger.info(`[refresh] ${config.sourceName}: extracted ${rawEvents.length} raw events`);
+    const withUrls = rawEvents.filter(e => e.url).length;
+    const withDates = rawEvents.filter(e => e.rawDate).length;
+    logger.info(
+      `[refresh] ${config.sourceName} extracted raw=${rawEvents.length} with_images=${withImages} with_urls=${withUrls} with_dates=${withDates} tokens=${extractTokens} ms=${Date.now() - extractStart} parse_failed=${parseFailed}`,
+    );
 
     if (rawEvents.length === 0) {
+      logger.warn(
+        `[refresh] ${config.sourceName} ABORT no_raw_events (parse_failed=${parseFailed})`,
+      );
       await updateRunStatus(scraperRun.id, 'PARTIAL', stats);
       await updateConfigStatus(configId, 'PARTIAL');
       return finalizeStats(stats, startTime);
     }
 
     // 3. Batch normalize (1 LLM call for all events)
+    const normStart = Date.now();
     const normalizedEvents = await batchNormalizeEvents(
       rawEvents,
       config.sourceName,
       config.sourceUrl,
       config.venue.name,
     );
-
-    logger.info(`[refresh] ${config.sourceName}: batch normalized ${normalizedEvents.length} events`);
+    const dropped = rawEvents.length - normalizedEvents.length;
+    logger.info(
+      `[refresh] ${config.sourceName} normalized in=${rawEvents.length} out=${normalizedEvents.length} dropped=${dropped} ms=${Date.now() - normStart}`,
+    );
 
     if (normalizedEvents.length === 0) {
-      logger.warn(`[refresh] ${config.sourceName}: batch normalization returned 0 events from ${rawEvents.length} raw`);
+      logger.warn(
+        `[refresh] ${config.sourceName} ABORT normalize_empty raw=${rawEvents.length}`,
+      );
       await updateRunStatus(scraperRun.id, 'PARTIAL', stats);
       await updateConfigStatus(configId, 'PARTIAL');
       return finalizeStats(stats, startTime);
     }
 
     // 3.5 Store images in S3 (falls through if not configured)
+    let imagesStored = 0;
     for (const event of normalizedEvents) {
       if (event.images && event.images.length > 0) {
         event.images = await storeImages(event.images);
+        imagesStored += event.images.length;
       }
+    }
+    if (imagesStored > 0) {
+      logger.info(`[refresh] ${config.sourceName} stored_images count=${imagesStored}`);
     }
 
     // 4. Match venue + dedup + save (existing pipeline)
     for (const event of normalizedEvents) {
+      const eventStart = Date.now();
+      const titleShort = (event.title || '').slice(0, 60);
       try {
         const venueMatch = await matchOrCreateVenue(
           event.venueName || config.venue.name,
@@ -157,8 +187,13 @@ export async function refreshVenue(configId: string): Promise<ScraperStats> {
           case 'merge': stats.eventsDuplicate++; break;
           case 'flag': stats.eventsFlagged++; break;
         }
+        logger.info(
+          `[refresh] ${config.sourceName} event action=${result.action} path=${result.matchPath ?? 'unknown'} id=${result.eventId} venue_id=${venueMatch.venueId} score=${result.similarityScore?.toFixed(3) ?? '-'} ms=${Date.now() - eventStart} title="${titleShort}"`,
+        );
       } catch (err: any) {
-        logger.error(`[refresh] ${config.sourceName}: failed to save event "${event.title}": ${err.message}`);
+        logger.error(
+          `[refresh] ${config.sourceName} event FAILED title="${titleShort}" ms=${Date.now() - eventStart} error="${err?.message || err}"`,
+        );
         stats.errors++;
       }
     }
@@ -167,7 +202,9 @@ export async function refreshVenue(configId: string): Promise<ScraperStats> {
     await updateRunStatus(scraperRun.id, runStatus, stats);
     await updateConfigStatus(configId, runStatus);
 
-    logger.info(`[refresh] ${config.sourceName}: done. ${stats.eventsNew} new, ${stats.eventsUpdated} updated, ${stats.errors} errors`);
+    logger.info(
+      `[refresh] ${config.sourceName} DONE status=${runStatus} raw=${stats.eventsFound} new=${stats.eventsNew} updated=${stats.eventsUpdated} merged=${stats.eventsDuplicate} flagged=${stats.eventsFlagged} errors=${stats.errors} duration_s=${((Date.now() - startTime) / 1000).toFixed(1)}`,
+    );
 
   } catch (err: any) {
     logger.error(`[refresh] ${config.sourceName}: failed: ${err.message}`);

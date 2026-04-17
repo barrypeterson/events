@@ -123,6 +123,15 @@ export interface DuplicateResult {
   eventId?: string; // Existing event ID if duplicate
   similarityScore?: number;
   action: 'create' | 'update' | 'merge' | 'flag'; // What action was taken
+  matchPath?:
+    | 'recurring'
+    | 'exact-time'
+    | 'cross-venue'
+    | 'core-words'
+    | 'fuzzy-title'
+    | 'vector-similarity'
+    | 'new'
+    | 'merged-canonical';
 }
 
 /**
