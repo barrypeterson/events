@@ -1,6 +1,5 @@
 import OpenAI from 'openai';
 import { prisma } from '@slo-events/database';
-import { browserPool } from '../lib/browser-pool';
 import { navigateAndExtract } from '../lib/page-utils';
 import { logger } from '../lib/scraper-utils';
 import { batchNormalizeEvents } from '../lib/batch-normalizer';
@@ -49,12 +48,9 @@ export async function refreshVenue(configId: string): Promise<ScraperStats> {
     },
   });
 
-  const context = await browserPool.createContext();
-  const page = await context.newPage();
-
   try {
     // 1. Navigate and get clean text
-    const { cleanText, status } = await navigateAndExtract(page, config.sourceUrl, analysis);
+    const { cleanText, status } = await navigateAndExtract(null, config.sourceUrl, analysis);
 
     if (status >= 400) {
       throw new Error(`Page returned ${status}`);
@@ -169,9 +165,6 @@ export async function refreshVenue(configId: string): Promise<ScraperStats> {
     stats.errors++;
     await updateRunStatus(scraperRun.id, 'FAILED', stats, err.message);
     await updateConfigStatus(configId, 'FAILED');
-  } finally {
-    await page.close();
-    await context.close();
   }
 
   return finalizeStats(stats, startTime);

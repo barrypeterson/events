@@ -1,6 +1,9 @@
 import type { Page } from 'playwright';
 import type { PageAnalysis } from '../types';
 import { logger } from './scraper-utils';
+import { browserPool } from './browser-pool';
+import { pickFingerprintExcept, fetchHeaders } from './stealth-fingerprints';
+import { humanScroll, humanDelay, jitter } from './human-timing';
 
 /**
  * Extract clean visible text from a rendered page.
@@ -135,45 +138,240 @@ export async function waitForContent(
  * Scroll the page to trigger lazy-loaded content.
  */
 async function autoScroll(page: Page): Promise<void> {
-  await page.evaluate(async () => {
-    await new Promise<void>(resolve => {
-      let totalHeight = 0;
-      const distance = 400;
-      const timer = setInterval(() => {
-        window.scrollBy(0, distance);
-        totalHeight += distance;
-        if (totalHeight >= document.body.scrollHeight) {
-          clearInterval(timer);
-          window.scrollTo(0, 0);
-          resolve();
-        }
-      }, 200);
-      // Safety: stop after 10 seconds
-      setTimeout(() => { clearInterval(timer); resolve(); }, 10000);
+  await humanScroll(page);
+}
+
+const BLOCK_STATUSES = new Set([401, 403, 406, 409, 418, 429, 451, 503]);
+const MIN_USEFUL_HTML = 2000;
+
+/**
+ * Run the page HTML through the same cleaning walk as getCleanPageTextWithImages,
+ * but in Node (cheerio-free, regex-light). Works for static pages we can fetch
+ * directly without a browser — which is the hardest case for bot detection
+ * because there's no Chromium fingerprint at all.
+ */
+async function fetchAndClean(
+  url: string,
+  attempt: number,
+): Promise<{ cleanText: string; status: number } | null> {
+  const fp = pickFingerprintExcept(new Set());
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    const res = await fetch(url, {
+      headers: fetchHeaders(fp),
+      redirect: 'follow',
+      signal: controller.signal,
     });
-  });
-  // Wait for any content triggered by scrolling
-  await page.waitForTimeout(2000);
+    clearTimeout(timeout);
+    const status = res.status;
+    if (!res.ok) {
+      logger.info(`[fetch-first] ${url} status=${status} attempt=${attempt}`);
+      return { cleanText: '', status };
+    }
+    const html = await res.text();
+    if (html.length < MIN_USEFUL_HTML) return { cleanText: '', status };
+
+    // If the response is almost all <script> (SPA shell), don't try to clean it
+    // here — the browser path is needed to run the JS.
+    const scriptRatio = (html.match(/<script/gi)?.length ?? 0) * 500 / html.length;
+    if (scriptRatio > 0.4 && !/<article|<main|<section|<h[1-3]/i.test(html)) {
+      logger.info(`[fetch-first] ${url} looks JS-rendered, skipping fetch path`);
+      return null;
+    }
+
+    const cleanText = cleanHtmlString(html, url);
+    if (cleanText.length < 200) return null;
+    return { cleanText, status };
+  } catch (err: any) {
+    logger.info(`[fetch-first] ${url} failed: ${err?.message || err}`);
+    return null;
+  }
+}
+
+function cleanHtmlString(html: string, baseUrl: string): string {
+  const skipImg = /logo|icon|spacer|pixel|avatar|badge|arrow|chevron|rough-edge|footer-bg|SB-Logo|Pressed-White/i;
+  const skipLink = /^#|^javascript:|^mailto:/;
+
+  // Drop script/style/noscript/svg blocks wholesale.
+  const stripped = html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+    .replace(/<svg[\s\S]*?<\/svg>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
+
+  const out: string[] = [];
+  const seenImg = new Set<string>();
+  const seenLink = new Set<string>();
+  const resolve = (href: string) => (href.startsWith('http') ? href : new URL(href, baseUrl).href);
+
+  // Walk tags linearly so images/links appear in document order alongside text.
+  const tokenRe = /<([a-zA-Z][a-zA-Z0-9-]*)\b([^>]*)>|<\/([a-zA-Z][a-zA-Z0-9-]*)>|([^<]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = tokenRe.exec(stripped)) !== null) {
+    const [, openTag, attrs, , text] = m;
+    if (openTag) {
+      const tag = openTag.toLowerCase();
+      if (tag === 'img') {
+        const src = attrs?.match(/\bsrc=["']([^"']+)["']/i)?.[1];
+        if (src && !src.startsWith('data:') && !skipImg.test(src)) {
+          const full = resolve(src);
+          if (!seenImg.has(full)) {
+            seenImg.add(full);
+            out.push(`[IMAGE: ${full}]`);
+          }
+        }
+      } else if (tag === 'a') {
+        const href = attrs?.match(/\bhref=["']([^"']+)["']/i)?.[1];
+        if (href && !skipLink.test(href)) {
+          try {
+            const full = resolve(href);
+            if (!seenLink.has(full)) {
+              seenLink.add(full);
+              out.push(`[LINK: ${full}]`);
+            }
+          } catch {
+            /* malformed href */
+          }
+        }
+      }
+      const style = attrs?.match(/\bstyle=["']([^"']+)["']/i)?.[1];
+      if (style?.includes('background-image')) {
+        const url = style.match(/url\(['"]?(https?:\/\/[^'")\s]+)['"]?\)/)?.[1];
+        if (url && !skipImg.test(url) && !seenImg.has(url)) {
+          seenImg.add(url);
+          out.push(`[IMAGE: ${url}]`);
+        }
+      }
+    } else if (text) {
+      const decoded = text
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&nbsp;/g, ' ')
+        .trim();
+      if (decoded) out.push(decoded);
+    }
+  }
+  return out
+    .join('\n')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
+async function warmUp(page: Page, targetHost: string): Promise<void> {
+  // Neutral referer establishes Sec-Fetch-Site: cross-site (the most common
+  // browser case) instead of 'none', which is the tell of a directly-typed URL.
+  const warmUrls = [
+    'https://www.google.com/',
+    'https://duckduckgo.com/',
+  ];
+  const warm = warmUrls[Math.floor(Math.random() * warmUrls.length)];
+  try {
+    await page.goto(warm, { waitUntil: 'domcontentloaded', timeout: 10000 });
+    await humanDelay(page, 400, 1200);
+  } catch {
+    // Warm-up is best-effort; proceed to target even if it fails.
+  }
+  void targetHost;
+}
+
+async function playwrightAttempt(
+  url: string,
+  analysis: PageAnalysis | null | undefined,
+  attempt: number,
+  rejectedUAs: Set<string>,
+): Promise<{ cleanText: string; status: number }> {
+  const fp = pickFingerprintExcept(rejectedUAs);
+  rejectedUAs.add(fp.userAgent);
+  const context = await browserPool.createContext(undefined, fp);
+  const page = await context.newPage();
+  try {
+    if (attempt > 1) {
+      const { hostname } = new URL(url);
+      await warmUp(page, hostname);
+    } else {
+      await humanDelay(page, 100, 400);
+    }
+
+    const response = await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 45000,
+    });
+    const status = response?.status() || 0;
+    if (status && status >= 400) {
+      return { cleanText: '', status };
+    }
+
+    await humanDelay(page, 200, 700);
+    await waitForContent(page, analysis);
+    const cleanText = await getCleanPageTextWithImages(page);
+    return { cleanText, status };
+  } finally {
+    await context.close().catch(() => undefined);
+  }
 }
 
 /**
  * Navigate to a URL with stealth context and wait for content.
- * Returns the clean text of the rendered page.
+ *
+ * Strategy, cheapest-to-most-expensive:
+ *   1. Plain fetch() with a rotating Chrome UA. Zero fingerprint, works for
+ *      any site whose HTML is present in the raw response (most venues).
+ *   2. Playwright with a stealth-patched Chromium and one of five realistic
+ *      fingerprints. Handles JS-rendered pages.
+ *   3. Retry playwright with a different fingerprint and a warm-up referer.
+ *      Handles sites that block the first fingerprint or the no-referer case.
  */
 export async function navigateAndExtract(
-  page: Page,
+  pageOrUnused: Page | null,
   url: string,
   analysis?: PageAnalysis | null,
 ): Promise<{ cleanText: string; status: number }> {
-  const response = await page.goto(url, {
-    waitUntil: 'domcontentloaded',
-    timeout: 45000,
-  });
+  void pageOrUnused; // retained in signature for caller compatibility
 
-  const status = response?.status() || 0;
+  const pageType = analysis?.pageType;
+  const canFetch = pageType === 'static' || pageType === undefined || pageType === null;
 
-  await waitForContent(page, analysis);
-  const cleanText = await getCleanPageTextWithImages(page);
+  if (canFetch) {
+    const fetchResult = await fetchAndClean(url, 1);
+    if (fetchResult && fetchResult.cleanText.length >= 200 && fetchResult.status < 400) {
+      logger.info(`[navigate] ${url} resolved via fetch (${fetchResult.cleanText.length} chars)`);
+      return fetchResult;
+    }
+  }
 
-  return { cleanText, status };
+  const rejectedUAs = new Set<string>();
+  const maxAttempts = 3;
+  let lastStatus = 0;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const result = await playwrightAttempt(url, analysis, attempt, rejectedUAs);
+      if (result.status && BLOCK_STATUSES.has(result.status) && attempt < maxAttempts) {
+        lastStatus = result.status;
+        logger.warn(`[navigate] ${url} blocked with ${result.status} on attempt ${attempt}, rotating fingerprint`);
+        await new Promise(r => setTimeout(r, jitter(1500, 3500)));
+        continue;
+      }
+      if (result.cleanText.length < 200 && attempt < maxAttempts) {
+        logger.warn(`[navigate] ${url} returned thin content (${result.cleanText.length} chars), retrying`);
+        lastStatus = result.status;
+        await new Promise(r => setTimeout(r, jitter(1500, 3500)));
+        continue;
+      }
+      return result;
+    } catch (err: any) {
+      lastStatus = 0;
+      logger.warn(`[navigate] ${url} attempt ${attempt} threw: ${err?.message || err}`);
+      if (attempt === maxAttempts) throw err;
+      await new Promise(r => setTimeout(r, jitter(1500, 3500)));
+    }
+  }
+
+  return { cleanText: '', status: lastStatus };
 }

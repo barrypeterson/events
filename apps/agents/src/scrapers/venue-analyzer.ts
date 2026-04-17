@@ -1,6 +1,5 @@
 import OpenAI from 'openai';
 import { prisma } from '@slo-events/database';
-import { browserPool } from '../lib/browser-pool';
 import { navigateAndExtract } from '../lib/page-utils';
 import { logger } from '../lib/scraper-utils';
 import type { PageAnalysis } from '../types';
@@ -23,25 +22,20 @@ export async function analyzeVenue(configId: string): Promise<PageAnalysis> {
 
   logger.info(`[analyze] Starting analysis of ${config.sourceName} (${config.sourceUrl})`);
 
-  // 1. Render the page with Playwright
-  const context = await browserPool.createContext();
-  const page = await context.newPage();
+  const { cleanText, status } = await navigateAndExtract(null, config.sourceUrl);
 
-  try {
-    const { cleanText, status } = await navigateAndExtract(page, config.sourceUrl);
+  if (status >= 400) {
+    throw new Error(`Page returned ${status} for ${config.sourceUrl}`);
+  }
 
-    if (status >= 400) {
-      throw new Error(`Page returned ${status} for ${config.sourceUrl}`);
-    }
+  if (cleanText.length < 100) {
+    throw new Error(`Page has no meaningful content (${cleanText.length} chars)`);
+  }
 
-    if (cleanText.length < 100) {
-      throw new Error(`Page has no meaningful content (${cleanText.length} chars)`);
-    }
+  logger.info(`[analyze] ${config.sourceName}: ${cleanText.length} chars clean text, status ${status}`);
 
-    logger.info(`[analyze] ${config.sourceName}: ${cleanText.length} chars clean text, status ${status}`);
-
-    // 2. Ask gpt-4o to analyze the content and write an extraction prompt
-    const analysisPrompt = `You are analyzing an events page for a venue called "${config.venue.name}" at ${config.sourceUrl}.
+  // 2. Ask gpt-4o to analyze the content and write an extraction prompt
+  const analysisPrompt = `You are analyzing an events page for a venue called "${config.venue.name}" at ${config.sourceUrl}.
 
 Your job: understand how events are presented on this page, then write a compact extraction prompt that a cheaper AI model (gpt-4o-mini) can use to efficiently extract events from this page's text content on future visits.
 
@@ -67,62 +61,57 @@ Respond with a JSON object (no markdown fences) with these fields:
   "cleanTextSize": ${cleanText.length}
 }`;
 
-    const client = getOpenAI();
-    const analysisResponse = await client.chat.completions.create({
-      model: ANALYSIS_MODEL,
-      max_tokens: 2048,
-      messages: [{ role: 'user', content: analysisPrompt }],
-    });
+  const client = getOpenAI();
+  const analysisResponse = await client.chat.completions.create({
+    model: ANALYSIS_MODEL,
+    max_tokens: 2048,
+    messages: [{ role: 'user', content: analysisPrompt }],
+  });
 
-    const responseText = analysisResponse.choices[0]?.message?.content || '';
-    let analysis: PageAnalysis;
+  const responseText = analysisResponse.choices[0]?.message?.content || '';
+  let analysis: PageAnalysis;
 
-    try {
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error('No JSON object found');
-      analysis = JSON.parse(jsonMatch[0]);
-    } catch (parseErr: any) {
-      throw new Error(`Failed to parse analysis response: ${parseErr.message}`);
-    }
-
-    logger.info(`[analyze] ${config.sourceName}: found ${analysis.sampleEventCount} sample events, page type: ${analysis.pageType}`);
-
-    // 3. Validate by running the extraction prompt against the same text
-    const validationResponse = await client.chat.completions.create({
-      model: 'gpt-4o-mini',
-      max_tokens: 4096,
-      messages: [
-        { role: 'system', content: analysis.extractionPrompt },
-        { role: 'user', content: `Extract all upcoming events from this page content:\n\n${cleanText}` },
-      ],
-    });
-
-    const validationText = validationResponse.choices[0]?.message?.content || '[]';
-    let validatedEvents: any[] = [];
-    try {
-      const match = validationText.match(/\[[\s\S]*\]/);
-      validatedEvents = match ? JSON.parse(match[0]) : [];
-    } catch {
-      logger.warn(`[analyze] Validation parse failed, proceeding with analysis anyway`);
-    }
-
-    logger.info(`[analyze] Validation: extraction prompt found ${validatedEvents.length} events (analysis saw ${analysis.sampleEventCount})`);
-
-    // 4. Store the analysis
-    await prisma.venueScraperConfig.update({
-      where: { id: configId },
-      data: {
-        pageAnalysis: analysis as any,
-        analysisModel: ANALYSIS_MODEL,
-        analyzedAt: new Date(),
-      },
-    });
-
-    logger.info(`[analyze] ${config.sourceName}: analysis complete and stored`);
-    return analysis;
-
-  } finally {
-    await page.close();
-    await context.close();
+  try {
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('No JSON object found');
+    analysis = JSON.parse(jsonMatch[0]);
+  } catch (parseErr: any) {
+    throw new Error(`Failed to parse analysis response: ${parseErr.message}`);
   }
+
+  logger.info(`[analyze] ${config.sourceName}: found ${analysis.sampleEventCount} sample events, page type: ${analysis.pageType}`);
+
+  // 3. Validate by running the extraction prompt against the same text
+  const validationResponse = await client.chat.completions.create({
+    model: 'gpt-4o-mini',
+    max_tokens: 4096,
+    messages: [
+      { role: 'system', content: analysis.extractionPrompt },
+      { role: 'user', content: `Extract all upcoming events from this page content:\n\n${cleanText}` },
+    ],
+  });
+
+  const validationText = validationResponse.choices[0]?.message?.content || '[]';
+  let validatedEvents: any[] = [];
+  try {
+    const match = validationText.match(/\[[\s\S]*\]/);
+    validatedEvents = match ? JSON.parse(match[0]) : [];
+  } catch {
+    logger.warn(`[analyze] Validation parse failed, proceeding with analysis anyway`);
+  }
+
+  logger.info(`[analyze] Validation: extraction prompt found ${validatedEvents.length} events (analysis saw ${analysis.sampleEventCount})`);
+
+  // 4. Store the analysis
+  await prisma.venueScraperConfig.update({
+    where: { id: configId },
+    data: {
+      pageAnalysis: analysis as any,
+      analysisModel: ANALYSIS_MODEL,
+      analyzedAt: new Date(),
+    },
+  });
+
+  logger.info(`[analyze] ${config.sourceName}: analysis complete and stored`);
+  return analysis;
 }

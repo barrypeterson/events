@@ -1,7 +1,6 @@
 import OpenAI from 'openai';
 import { prisma } from '@slo-events/database';
-import { browserPool } from './browser-pool';
-import { getCleanPageText } from './page-utils';
+import { navigateAndExtract } from './page-utils';
 import { logger } from './scraper-utils';
 
 function getOpenAI(): OpenAI {
@@ -48,21 +47,13 @@ export async function enrichEventDetails(eventId: string): Promise<boolean> {
 
   logger.info(`[enrich] Visiting detail page for: ${event.title}`);
 
-  const context = await browserPool.createContext();
-  const page = await context.newPage();
-
   try {
-    const response = await page.goto(event.ticketUrl, {
-      waitUntil: 'networkidle',
-      timeout: 30000,
-    });
+    const { cleanText, status } = await navigateAndExtract(null, event.ticketUrl);
 
-    if (!response || response.status() >= 400) {
-      logger.warn(`[enrich] ${event.title}: page returned ${response?.status()}`);
+    if (status >= 400) {
+      logger.warn(`[enrich] ${event.title}: page returned ${status}`);
       return false;
     }
-
-    const cleanText = await getCleanPageText(page);
 
     if (cleanText.length < 50) {
       logger.warn(`[enrich] ${event.title}: page has no meaningful content`);
@@ -119,9 +110,6 @@ export async function enrichEventDetails(eventId: string): Promise<boolean> {
   } catch (err: any) {
     logger.error(`[enrich] ${event.title}: failed: ${err.message}`);
     return false;
-  } finally {
-    await page.close();
-    await context.close();
   }
 }
 
