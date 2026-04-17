@@ -111,6 +111,21 @@ Respond with a JSON object (no markdown fences) with these fields:
 
   logger.info(`[analyze] Validation: extraction prompt found ${validatedEvents.length} events (analysis saw ${analysis.sampleEventCount})`);
 
+  // 3a. Guard: refuse to store a prompt that can't extract events.
+  // Past bug: if sampleEventCount was 37 but the generated prompt produced 0
+  // on the same text, we stored it anyway and every refresh afterwards
+  // returned raw=0. Require validation to recover at least 50% of samples,
+  // or at least 1 event when only a handful were detected.
+  const minExpected = Math.max(1, Math.floor(analysis.sampleEventCount * 0.5));
+  if (analysis.sampleEventCount > 0 && validatedEvents.length < minExpected) {
+    logger.error(
+      `[analyze] ${config.sourceName}: REJECTING prompt — validation extracted ${validatedEvents.length} events but analysis detected ${analysis.sampleEventCount} (need >=${minExpected}). Prompt preview: "${analysis.extractionPrompt.slice(0, 300)}"`,
+    );
+    throw new Error(
+      `Generated extraction prompt failed validation: detected ${analysis.sampleEventCount} events but the prompt only extracted ${validatedEvents.length}. Re-run analyze (the LLM will try again).`,
+    );
+  }
+
   // 4. Store the analysis
   await prisma.venueScraperConfig.update({
     where: { id: configId },
@@ -121,6 +136,8 @@ Respond with a JSON object (no markdown fences) with these fields:
     },
   });
 
-  logger.info(`[analyze] ${config.sourceName}: analysis complete and stored`);
+  logger.info(
+    `[analyze] ${config.sourceName}: analysis complete and stored (validation=${validatedEvents.length}/${analysis.sampleEventCount})`,
+  );
   return analysis;
 }

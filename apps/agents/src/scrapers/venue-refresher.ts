@@ -125,9 +125,18 @@ export async function refreshVenue(configId: string): Promise<ScraperStats> {
     );
 
     if (rawEvents.length === 0) {
+      // Log the LLM response and the text we fed in so we can tell whether
+      // the model refused, returned something non-array, or saw an empty page.
+      const preview = extractText.slice(0, 500).replace(/\s+/g, ' ');
+      const textPreview = cleanText.slice(0, 300).replace(/\s+/g, ' ');
       logger.warn(
-        `[refresh] ${config.sourceName} ABORT no_raw_events (parse_failed=${parseFailed})`,
+        `[refresh] ${config.sourceName} ABORT no_raw_events (parse_failed=${parseFailed}) clean_chars=${cleanText.length} llm_response_preview="${preview}" clean_text_preview="${textPreview}"`,
       );
+      if (cleanText.length > 1000 && !parseFailed) {
+        logger.warn(
+          `[refresh] ${config.sourceName} suggestion: the stored extraction prompt returned [] on ${cleanText.length} chars of content — re-run analyze to regenerate the prompt.`,
+        );
+      }
       await updateRunStatus(scraperRun.id, 'PARTIAL', stats);
       await updateConfigStatus(configId, 'PARTIAL');
       return finalizeStats(stats, startTime);
