@@ -26,8 +26,15 @@ function getClient(): S3Client | null {
 
 function imageKey(sourceUrl: string): string {
   const hash = crypto.createHash('sha256').update(sourceUrl).digest('hex').slice(0, 16);
-  const path = new URL(sourceUrl).pathname.toLowerCase();
-  const ext = path.endsWith('.png') ? '.png' : path.endsWith('.webp') ? '.webp' : path.endsWith('.gif') ? '.gif' : '.jpg';
+  let ext = '.jpg';
+  try {
+    const path = new URL(sourceUrl).pathname.toLowerCase();
+    if (path.endsWith('.png')) ext = '.png';
+    else if (path.endsWith('.webp')) ext = '.webp';
+    else if (path.endsWith('.gif')) ext = '.gif';
+  } catch {
+    // Malformed URL — fall back to .jpg extension; caller will skip upload anyway.
+  }
   return `events/${hash}${ext}`;
 }
 
@@ -36,9 +43,22 @@ function publicUrl(key: string): string {
   return `https://${BUCKET}.s3.${REGION}.amazonaws.com/${key}`;
 }
 
+function isValidUrl(u: string): boolean {
+  try {
+    const parsed = new URL(u);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 async function storeImage(sourceUrl: string): Promise<string> {
   const client = getClient();
   if (!client || !BUCKET) return sourceUrl;
+  if (!isValidUrl(sourceUrl)) {
+    logger.warn(`[s3] Skipping invalid image URL: ${sourceUrl.slice(0, 120)}`);
+    return sourceUrl;
+  }
 
   const key = imageKey(sourceUrl);
 
@@ -86,8 +106,15 @@ async function storeImage(sourceUrl: string): Promise<string> {
 
 /**
  * Store multiple images to S3. Falls through to original URLs if S3 is not configured.
+ * Uses allSettled so one broken URL doesn't abort the whole batch — the failing
+ * entry just falls back to its original URL (or the pre-validated sentinel).
  */
 export async function storeImages(urls: string[]): Promise<string[]> {
   if (!BUCKET || !ACCESS_KEY || urls.length === 0) return urls;
-  return Promise.all(urls.map(storeImage));
+  const results = await Promise.allSettled(urls.map(storeImage));
+  return results.map((r, i) => {
+    if (r.status === 'fulfilled') return r.value;
+    logger.warn(`[s3] storeImage rejected for ${urls[i]?.slice(0, 120)}: ${r.reason?.message || r.reason}`);
+    return urls[i];
+  });
 }

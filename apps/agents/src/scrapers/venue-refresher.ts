@@ -169,16 +169,30 @@ export async function refreshVenue(configId: string): Promise<ScraperStats> {
       return finalizeStats(stats, startTime);
     }
 
-    // 3.5 Store images in S3 (falls through if not configured)
+    // 3.5 Store images in S3 (falls through if not configured).
+    // Image-storage failures must NEVER abort the refresh — we've got 25 valid
+    // events already normalized; losing all of them because one image URL is
+    // malformed is the wrong tradeoff. Per-event try/catch with origin-URL
+    // fallback keeps the pipeline moving.
     let imagesStored = 0;
+    let imageFailures = 0;
     for (const event of normalizedEvents) {
       if (event.images && event.images.length > 0) {
-        event.images = await storeImages(event.images);
-        imagesStored += event.images.length;
+        try {
+          event.images = await storeImages(event.images);
+          imagesStored += event.images.length;
+        } catch (err: any) {
+          imageFailures++;
+          logger.warn(
+            `[refresh] ${config.sourceName} storeImages threw for event "${(event.title || '').slice(0, 60)}" — keeping original URLs. error="${err?.message || err}"`,
+          );
+        }
       }
     }
-    if (imagesStored > 0) {
-      logger.info(`[refresh] ${config.sourceName} stored_images count=${imagesStored}`);
+    if (imagesStored > 0 || imageFailures > 0) {
+      logger.info(
+        `[refresh] ${config.sourceName} stored_images count=${imagesStored} failures=${imageFailures}`,
+      );
     }
 
     // 4. Match venue + dedup + save (existing pipeline)
