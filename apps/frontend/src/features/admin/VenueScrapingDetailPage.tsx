@@ -15,6 +15,7 @@ import {
   CheckCircle,
   Copy,
   Check,
+  Sparkles,
 } from 'lucide-react'
 
 function StatusBadge({ status }: { status: string | null | undefined }) {
@@ -324,47 +325,81 @@ export function VenueScrapingDetailPage() {
           {eventsQuery.data && eventsQuery.data.length === 0 && (
             <p className="text-sm text-muted-foreground">No events yet. Trigger a refresh.</p>
           )}
-          {eventsQuery.data && eventsQuery.data.map(event => <EventRow key={event.id} event={event as any} />)}
+          {eventsQuery.data && eventsQuery.data.map(event => (
+            <EventRow
+              key={event.id}
+              event={event as any}
+              onAfterEnrich={() => { eventsQuery.refetch(); enrichPreview.refetch() }}
+            />
+          ))}
         </CardContent>
       </Card>
     </div>
   )
 }
 
-function EventRow({ event }: { event: {
-  id: string
-  title: string
-  description: string | null
-  startDateTime: string | Date
-  category: string[]
-  images: string[]
-  ticketUrl: string | null
-  detailUrl: string | null
-  metadata: unknown
-  sources?: Array<{ id: string; sourceUrl: string; scrapedAt: string | Date; rawData: unknown }>
-} }) {
+function EventRow({ event, onAfterEnrich }: {
+  event: {
+    id: string
+    title: string
+    description: string | null
+    startDateTime: string | Date
+    category: string[]
+    images: string[]
+    ticketUrl: string | null
+    detailUrl: string | null
+    metadata: unknown
+    sources?: Array<{ id: string; sourceUrl: string; scrapedAt: string | Date; rawData: unknown }>
+  }
+  onAfterEnrich: () => void
+}) {
   const [open, setOpen] = useState(false)
   const meta = (event.metadata as any) || {}
   const enriched = !!meta.enrichedAt
   const rawSource = event.sources?.[0]
+
+  const enrichMutation = trpc.venueScraping.enrichEvent.useMutation({
+    onSuccess: () => onAfterEnrich(),
+  })
+
   return (
     <div className="border-b last:border-0">
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="flex w-full items-start justify-between gap-4 py-2 text-left hover:bg-muted/50"
-      >
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-            <span className="truncate font-medium">{event.title}</span>
+      <div className="flex w-full items-start justify-between gap-4 py-2">
+        <button
+          onClick={() => setOpen(o => !o)}
+          className="flex min-w-0 flex-1 items-start text-left hover:bg-muted/50"
+        >
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              <span className="truncate font-medium">{event.title}</span>
+            </div>
+            <div className="ml-5 mt-0.5 text-xs text-muted-foreground">
+              <Timestamp date={event.startDateTime} />
+              {event.category?.length > 0 && <span className="ml-2">{event.category.join(', ')}</span>}
+              {enriched && <Badge className="ml-2 bg-green-100 text-green-700 text-[10px]">Enriched</Badge>}
+              {enrichMutation.data && enrichMutation.data.success === false && (
+                <Badge variant="destructive" className="ml-2 text-[10px]">Skipped</Badge>
+              )}
+            </div>
           </div>
-          <div className="ml-5 mt-0.5 text-xs text-muted-foreground">
-            <Timestamp date={event.startDateTime} />
-            {event.category?.length > 0 && <span className="ml-2">{event.category.join(', ')}</span>}
-            {enriched && <Badge className="ml-2 bg-green-100 text-green-700 text-[10px]">Enriched</Badge>}
-          </div>
-        </div>
-      </button>
+        </button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={enrichMutation.isPending || enriched}
+          onClick={() => enrichMutation.mutate({ eventId: event.id })}
+          title={enriched ? 'Already enriched' : 'Fetch the detail page and fill in description, lineup, door time, age'}
+        >
+          <Sparkles className={`h-3.5 w-3.5 ${enrichMutation.isPending ? 'animate-pulse' : ''}`} />
+          <span className="ml-1 text-xs">
+            {enrichMutation.isPending ? 'Enriching…'
+              : enrichMutation.data
+                ? (enrichMutation.data.success ? 'Enriched ✓' : 'Skipped')
+                : 'Enrich'}
+          </span>
+        </Button>
+      </div>
       {open && (
         <div className="ml-5 mb-2 grid gap-3 pb-2 md:grid-cols-2">
           <div>
