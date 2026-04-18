@@ -1,10 +1,6 @@
-import OpenAI from 'openai';
 import { RawEvent, NormalizedEvent } from '../types';
 import { logger, cleanText, normalizeString } from './scraper-utils';
-
-function getOpenAI(): OpenAI {
-  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-}
+import { getOpenAI } from './openai-client';
 
 /**
  * Normalize all raw events in a single LLM call.

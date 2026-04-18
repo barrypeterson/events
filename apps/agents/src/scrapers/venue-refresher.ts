@@ -1,17 +1,13 @@
-import OpenAI from 'openai';
 import { prisma } from '@slo-events/database';
 import { navigateAndExtract } from '../lib/page-utils';
 import { logger } from '../lib/scraper-utils';
+import { getOpenAI } from '../lib/openai-client';
 import { batchNormalizeEvents } from '../lib/batch-normalizer';
 import { matchOrCreateVenue } from '../lib/venue-matcher';
 import { deduplicateEvent } from '../lib/deduplicator';
 import { generateEmbedding } from '../lib/embeddings';
 import { storeImages } from '../lib/image-store';
 import type { PageAnalysis, RawEvent, ScraperStats } from '../types';
-
-function getOpenAI(): OpenAI {
-  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-}
 
 /**
  * Refresh events for a venue using its stored page analysis.

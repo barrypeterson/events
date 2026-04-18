@@ -1,7 +1,7 @@
-import OpenAI from 'openai';
 import { prisma } from '@slo-events/database';
 import { navigateAndExtract } from './page-utils';
 import { logger } from './scraper-utils';
+import { getOpenAI } from './openai-client';
 
 /**
  * Ticket-provider domains that aggressively block scrapers (Cloudflare/WAF).
@@ -43,10 +43,6 @@ function hostnameOf(url: string): string | null {
 function isTicketProvider(url: string): boolean {
   const host = hostnameOf(url);
   return host !== null && TICKET_PROVIDER_DOMAINS.has(host);
-}
-
-function getOpenAI(): OpenAI {
-  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 }
 
 const ENRICHMENT_PROMPT = `You are extracting detailed information about an event from its detail page.

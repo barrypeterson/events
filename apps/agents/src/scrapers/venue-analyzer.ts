@@ -1,15 +1,12 @@
-import OpenAI from 'openai';
+import type OpenAI from 'openai';
 import { prisma } from '@slo-events/database';
 import { navigateAndExtract } from '../lib/page-utils';
 import { logger } from '../lib/scraper-utils';
+import { getOpenAI } from '../lib/openai-client';
 import type { PageAnalysis } from '../types';
 
 const ANALYSIS_MODEL = 'gpt-4o';
 const MAX_PROMPT_ATTEMPTS = 3;
-
-function getOpenAI(): OpenAI {
-  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-}
 
 /**
  * Analyze a venue's events page to learn its structure.
