@@ -89,6 +89,7 @@ ${JSON.stringify(eventsJson, null, 2)}`;
         tags: Array.isArray(n.tags) ? n.tags : [],
         images: raw.imageUrl ? [raw.imageUrl] : [],
         ticketUrl: raw.url || undefined,
+        detailUrl: raw.detailUrl || undefined,
         priceMin: n.priceMin ?? undefined,
         priceMax: n.priceMax ?? undefined,
         isFree: n.isFree ?? false,

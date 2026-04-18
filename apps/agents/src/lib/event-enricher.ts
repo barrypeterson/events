@@ -3,6 +3,48 @@ import { prisma } from '@slo-events/database';
 import { navigateAndExtract } from './page-utils';
 import { logger } from './scraper-utils';
 
+/**
+ * Ticket-provider domains that aggressively block scrapers (Cloudflare/WAF).
+ * Enrichment against these will almost always return 401/403 and burn time +
+ * proxy bandwidth for no result. If an event's only URL is on one of these,
+ * skip enrichment entirely.
+ */
+const TICKET_PROVIDER_DOMAINS = new Set([
+  'ticketmaster.com',
+  'www.ticketmaster.com',
+  'axs.com',
+  'www.axs.com',
+  'eventbrite.com',
+  'www.eventbrite.com',
+  'prekindle.com',
+  'www.prekindle.com',
+  'seetickets.us',
+  'www.seetickets.us',
+  'etix.com',
+  'www.etix.com',
+  'dice.fm',
+  'www.dice.fm',
+  'livenation.com',
+  'www.livenation.com',
+  'stubhub.com',
+  'www.stubhub.com',
+  'vividseats.com',
+  'www.vividseats.com',
+]);
+
+function hostnameOf(url: string): string | null {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function isTicketProvider(url: string): boolean {
+  const host = hostnameOf(url);
+  return host !== null && TICKET_PROVIDER_DOMAINS.has(host);
+}
+
 function getOpenAI(): OpenAI {
   return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 }
@@ -27,7 +69,14 @@ export async function enrichEventDetails(eventId: string): Promise<boolean> {
   const start = Date.now();
   const event = await prisma.event.findUnique({
     where: { id: eventId },
-    select: { id: true, title: true, ticketUrl: true, description: true, metadata: true },
+    select: {
+      id: true,
+      title: true,
+      ticketUrl: true,
+      detailUrl: true,
+      description: true,
+      metadata: true,
+    },
   });
 
   if (!event) {
@@ -37,21 +86,42 @@ export async function enrichEventDetails(eventId: string): Promise<boolean> {
 
   const titleShort = (event.title || '').slice(0, 60);
 
-  if (!event.ticketUrl) {
-    logger.debug(`[enrich] event_id=${eventId} SKIP reason=no_url title="${titleShort}"`);
-    return false;
-  }
-
   const meta = (event.metadata as any) || {};
   if (meta.enrichedAt) {
     logger.debug(`[enrich] event_id=${eventId} SKIP reason=already_enriched title="${titleShort}"`);
     return false;
   }
 
-  logger.info(`[enrich] event_id=${eventId} START url=${event.ticketUrl} title="${titleShort}"`);
+  // Prefer detailUrl (venue's own page). Fall back to ticketUrl only if
+  // it's NOT a known ticket-provider domain — those are bot-walled and burn
+  // proxy bandwidth for guaranteed 401/403s.
+  let enrichUrl: string | null = null;
+  let enrichSource = '';
+  if (event.detailUrl) {
+    enrichUrl = event.detailUrl;
+    enrichSource = 'detail';
+  } else if (event.ticketUrl && !isTicketProvider(event.ticketUrl)) {
+    enrichUrl = event.ticketUrl;
+    enrichSource = 'ticket';
+  }
+
+  if (!enrichUrl) {
+    if (event.ticketUrl && isTicketProvider(event.ticketUrl)) {
+      logger.info(
+        `[enrich] event_id=${eventId} SKIP reason=third_party_ticket_only host=${hostnameOf(event.ticketUrl)} title="${titleShort}"`,
+      );
+    } else {
+      logger.debug(`[enrich] event_id=${eventId} SKIP reason=no_url title="${titleShort}"`);
+    }
+    return false;
+  }
+
+  logger.info(
+    `[enrich] event_id=${eventId} START url=${enrichUrl} src=${enrichSource} title="${titleShort}"`,
+  );
 
   try {
-    const { cleanText, status } = await navigateAndExtract(null, event.ticketUrl);
+    const { cleanText, status } = await navigateAndExtract(null, enrichUrl);
 
     if (status >= 400) {
       logger.warn(
@@ -134,10 +204,15 @@ export async function enrichEventDetails(eventId: string): Promise<boolean> {
  * Enrich all events that have a URL but no description.
  */
 export async function enrichUnenrichedEvents(limit: number = 50): Promise<{ enriched: number; failed: number; skipped: number }> {
+  // Need SOME scrapable URL — prefer detail_url, accept ticket_url too (the
+  // per-event enrichEventDetails() will filter out ticket-provider domains
+  // to avoid wasting requests on Ticketmaster/AXS/etc.).
   const events = await prisma.$queryRaw<Array<{ id: string; title: string }>>`
     SELECT id, title FROM events
-    WHERE ticket_url IS NOT NULL
-      AND ticket_url != ''
+    WHERE (
+      (detail_url IS NOT NULL AND detail_url != '')
+      OR (ticket_url IS NOT NULL AND ticket_url != '')
+    )
       AND (metadata->>'enrichedAt' IS NULL)
       AND status = 'ACTIVE'
       AND (

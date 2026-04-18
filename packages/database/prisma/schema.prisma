@@ -131,6 +131,10 @@ model Event {
   // Media
   images          String[]      @db.Text
   ticketUrl       String?       @map("ticket_url") @db.VarChar(500)
+  // The venue's own detail page for this event, separate from ticketUrl
+  // (which often points to Ticketmaster/AXS/etc). Used for enrichment —
+  // we scrape the venue page, not the ticket-provider page.
+  detailUrl       String?       @map("detail_url") @db.VarChar(500)
 
   // Pricing
   priceMin        Decimal?      @map("price_min") @db.Decimal(10, 2)

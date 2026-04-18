@@ -477,7 +477,7 @@ async function createEvent(
     const result = await prisma.$queryRaw<Array<{ id: string }>>`
       INSERT INTO events (
         title, normalized_title, description, start_datetime, end_datetime,
-        timezone, venue_id, category, tags, images, ticket_url,
+        timezone, venue_id, category, tags, images, ticket_url, detail_url,
         price_min, price_max, is_free, age_restriction, embedding,
         is_recurring, recurring_series_id,
         status, confidence_score, updated_at
@@ -493,6 +493,7 @@ async function createEvent(
         ${event.tags}::varchar[],
         ${event.images}::text[],
         ${event.ticketUrl},
+        ${event.detailUrl},
         ${event.priceMin},
         ${event.priceMax},
         ${event.isFree},
@@ -542,6 +543,7 @@ async function updateEvent(eventId: string, event: NormalizedEvent): Promise<voi
         endDateTime: event.endDateTime,
         images: event.images,
         ticketUrl: event.ticketUrl,
+        detailUrl: event.detailUrl,
         priceMin: event.priceMin,
         priceMax: event.priceMax,
         isFree: event.isFree,

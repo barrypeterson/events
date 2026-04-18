@@ -7,7 +7,8 @@ export interface RawEvent {
   title: string;
   rawHtml?: string;
   rawText?: string;
-  url?: string;
+  url?: string;        // Ticket purchase URL (often off-site: Ticketmaster, AXS, etc.)
+  detailUrl?: string;  // Venue's own detail page for this event (used for enrichment)
   imageUrl?: string;
   rawDate?: string;
   rawTime?: string;
@@ -33,7 +34,8 @@ export interface NormalizedEvent {
   category: string[];
   tags: string[];
   images: string[];
-  ticketUrl?: string;
+  ticketUrl?: string;  // Ticket purchase URL (may be off-site)
+  detailUrl?: string;  // Venue's own detail page (same-origin, safe to scrape)
   priceMin?: number;
   priceMax?: number;
   isFree: boolean;

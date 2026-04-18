@@ -106,6 +106,7 @@ export async function refreshVenue(configId: string): Promise<ScraperStats> {
         rawPrice: e.rawPrice || e.price || '',
         imageUrl: e.imageUrl || null,
         url: e.url || null,
+        detailUrl: e.detailUrl || null,
         rawVenue: config.venue.name,
         metadata: {
           scrapedAt: new Date().toISOString(),
