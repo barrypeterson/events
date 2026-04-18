@@ -32,16 +32,18 @@ node_modules: package.json pnpm-lock.yaml
 	pnpm install
 	@touch node_modules
 
-# Stop local dev servers (frontend/backend) + Docker services
+# Stop local dev servers (frontend/backend/agents) + Docker services
 stop:
 	-@pkill -f "tsx.*src/server.ts" 2>/dev/null || true
 	-@pkill -f "node.*vite" 2>/dev/null || true
+	-@pkill -f "tsx.*orchestrator/index.ts" 2>/dev/null || true
 	docker-compose down
 
 # Stop everything + wipe volumes
 clean:
 	-@pkill -f "tsx.*src/server.ts" 2>/dev/null || true
 	-@pkill -f "node.*vite" 2>/dev/null || true
+	-@pkill -f "tsx.*orchestrator/index.ts" 2>/dev/null || true
 	docker-compose down -v
 
 # Prisma Studio (DB browser)

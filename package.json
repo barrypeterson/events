@@ -9,7 +9,8 @@
   ],
   "scripts": {
     "start": "./start.sh",
-    "dev": "turbo run dev",
+    "dev": "turbo run dev --filter=!@slo-events/agents",
+    "dev:all": "turbo run dev",
     "build": "turbo run build",
     "test": "turbo run test",
     "test:unit": "turbo run test --filter='!@slo-events/e2e'",
