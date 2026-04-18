@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { trpc } from '@/lib/trpc'
 import {
   Table,
@@ -90,6 +91,9 @@ export function VenueScrapingPage() {
     onSuccess: () => { setEditingUrl(null); configs.refetch(); },
   })
 
+  const enrichPreview = trpc.venueScraping.enrichmentPreview.useQuery({ limit: 200 })
+  const [showEnrichPreview, setShowEnrichPreview] = useState(false)
+
   const analyzed = configs.data?.filter((c: any) => c.pageAnalysis) || []
   const enabled = configs.data?.filter((c: any) => c.scrapingEnabled) || []
 
@@ -110,21 +114,73 @@ export function VenueScrapingPage() {
             <RefreshCw className={`mr-2 h-4 w-4 ${triggerAllMutation.isPending ? 'animate-spin' : ''}`} />
             Refresh All ({enabled.length})
           </Button>
-          <Button
-            variant="outline"
-            onClick={() => enrichAllMutation.mutate({})}
-            disabled={enrichAllMutation.isPending}
-          >
-            {enrichAllMutation.isPending ? (
-              <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> Enriching...</>
-            ) : enrichAllMutation.data ? (
-              <>{enrichAllMutation.data.enriched} enriched</>
-            ) : (
-              <>Enrich Events</>
+          <div className="flex flex-col items-end">
+            <Button
+              variant="outline"
+              onClick={() => enrichAllMutation.mutate({})}
+              disabled={enrichAllMutation.isPending}
+            >
+              {enrichAllMutation.isPending ? (
+                <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> Enriching...</>
+              ) : enrichAllMutation.data ? (
+                <>{enrichAllMutation.data.enriched} enriched</>
+              ) : (
+                <>Enrich Events</>
+              )}
+            </Button>
+            {enrichPreview.data && (
+              <button
+                onClick={() => setShowEnrichPreview(s => !s)}
+                className="mt-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                {enrichPreview.data.eligible.length} eligible · {enrichPreview.data.skipped.length} skipped
+                <span className="ml-1">{showEnrichPreview ? '▾' : '▸'}</span>
+              </button>
             )}
-          </Button>
+          </div>
         </div>
       </div>
+
+      {showEnrichPreview && enrichPreview.data && (
+        <Card className="mb-6">
+          <CardContent className="space-y-3 pt-6 text-sm">
+            {enrichPreview.data.eligible.length > 0 && (
+              <div>
+                <div className="mb-1 text-xs font-medium text-green-700">
+                  Will enrich ({enrichPreview.data.eligible.length})
+                </div>
+                <ul className="space-y-1 text-xs max-h-64 overflow-auto">
+                  {enrichPreview.data.eligible.map(e => (
+                    <li key={e.id} className="flex items-baseline gap-2">
+                      <Badge variant="outline" className="text-[10px] shrink-0">{e.urlSource}</Badge>
+                      <span className="font-medium">{e.title}</span>
+                      <span className="text-muted-foreground">· {e.venueName}</span>
+                      <span className="truncate text-muted-foreground">{e.urlToUse}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {enrichPreview.data.skipped.length > 0 && (
+              <div>
+                <div className="mb-1 text-xs font-medium text-muted-foreground">
+                  Will skip ({enrichPreview.data.skipped.length})
+                </div>
+                <ul className="space-y-1 text-xs max-h-64 overflow-auto">
+                  {enrichPreview.data.skipped.map(e => (
+                    <li key={e.id} className="flex items-baseline gap-2">
+                      <Badge variant="outline" className="text-[10px] shrink-0">{e.reason}</Badge>
+                      <span>{e.title}</span>
+                      <span className="text-muted-foreground">· {e.venueName}</span>
+                      {e.host && <span className="text-muted-foreground">· {e.host}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <Card>
@@ -177,7 +233,12 @@ export function VenueScrapingPage() {
                 return (
                   <TableRow key={config.id}>
                     <TableCell className="font-medium">
-                      {config.venue?.name || config.sourceName}
+                      <Link
+                        to={`/admin/venue-scraping/${config.id}`}
+                        className="hover:underline"
+                      >
+                        {config.venue?.name || config.sourceName}
+                      </Link>
                     </TableCell>
                     <TableCell>
                       {editingUrl?.id === config.id ? (

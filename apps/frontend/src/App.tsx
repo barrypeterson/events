@@ -13,6 +13,7 @@ import { NotFoundPage } from '@/features/events/NotFoundPage'
 import { TonightPage } from '@/features/events/TonightPage'
 import { DesignSystemPage } from '@/features/admin/DesignSystemPage'
 import { VenueScrapingPage } from '@/features/admin/VenueScrapingPage'
+import { VenueScrapingDetailPage } from '@/features/admin/VenueScrapingDetailPage'
 import { AdminLoginPage } from '@/features/admin/AdminLoginPage'
 import { AdminGuard } from '@/features/admin/AdminGuard'
 import { useState } from 'react'
@@ -46,6 +47,7 @@ function App() {
               <Route path="/admin/scraper-playground" element={<AdminGuard><ScraperPlaygroundPage /></AdminGuard>} />
               <Route path="/admin/design-system" element={<AdminGuard><DesignSystemPage /></AdminGuard>} />
               <Route path="/admin/venue-scraping" element={<AdminGuard><VenueScrapingPage /></AdminGuard>} />
+              <Route path="/admin/venue-scraping/:configId" element={<AdminGuard><VenueScrapingDetailPage /></AdminGuard>} />
               <Route path="*" element={<NotFoundPage />} />
             </Routes>
           </Layout>
