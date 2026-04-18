@@ -1,8 +1,9 @@
-.PHONY: dev setup stop clean db-studio db-seed db-push logs
+.PHONY: dev up setup stop clean db-studio db-seed db-push logs
 
 # Start everything: Docker services, DB schema, dev servers
 dev: .env node_modules
-	@docker-compose up -d --wait
+	@docker-compose up -d
+	@docker-compose up -d --wait postgres redis
 	@cd packages/database && pnpm prisma generate --no-hints 2>/dev/null && pnpm prisma db push --accept-data-loss 2>/dev/null
 	@echo ""
 	@echo "  Frontend:        http://localhost:6100"
@@ -10,6 +11,9 @@ dev: .env node_modules
 	@echo "  Redis Commander: http://localhost:6081"
 	@echo ""
 	pnpm dev
+
+# Alias — `make up` is muscle memory for a lot of people
+up: dev
 
 # First-time setup only
 setup: .env node_modules
