@@ -77,17 +77,28 @@ export async function refreshVenue(configId: string): Promise<ScraperStats> {
     // The clean text now contains [IMAGE: url] markers inline with content
     const extractStart = Date.now();
     const client = getOpenAI();
-    const extractResponse = await client.chat.completions.create({
-      model: config.refreshModel || 'gpt-4o-mini',
-      // 16384 = gpt-4o-mini's documented max output. Matches analyzer
-      // validation cap. Headful rendering + detailUrl schema can easily
-      // exceed 8k output tokens for ~40 events.
-      max_tokens: 16384,
-      messages: [
-        { role: 'system', content: analysis.extractionPrompt },
-        { role: 'user', content: `Extract all upcoming events from this page content. Image URLs appear as [IMAGE: url] markers near their associated event.\n\n${cleanText}` },
-      ],
-    });
+    // Heartbeat every 15s while the LLM extracts — otherwise the UI and
+    // logs are silent for 1-3 minutes and it looks like a hang.
+    const extractHeartbeat = setInterval(() => {
+      const secs = Math.round((Date.now() - extractStart) / 1000);
+      logger.info(`[refresh] ${config.sourceName} extract LLM still running (${secs}s elapsed)`);
+    }, 15000);
+    let extractResponse;
+    try {
+      extractResponse = await client.chat.completions.create({
+        model: config.refreshModel || 'gpt-4o-mini',
+        // 16384 = gpt-4o-mini's documented max output. Matches analyzer
+        // validation cap. Headful rendering + detailUrl schema can easily
+        // exceed 8k output tokens for ~40 events.
+        max_tokens: 16384,
+        messages: [
+          { role: 'system', content: analysis.extractionPrompt },
+          { role: 'user', content: `Extract all upcoming events from this page content. Image URLs appear as [IMAGE: url] markers near their associated event.\n\n${cleanText}` },
+        ],
+      });
+    } finally {
+      clearInterval(extractHeartbeat);
+    }
 
     const extractText = extractResponse.choices[0]?.message?.content || '[]';
     const extractTokens = extractResponse.usage?.total_tokens ?? 0;

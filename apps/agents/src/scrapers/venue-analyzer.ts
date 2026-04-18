@@ -216,31 +216,44 @@ async function runValidation(
   finishReason: string;
   parseError?: string;
 }> {
-  const response = await client.chat.completions.create({
-    model: 'gpt-4o-mini',
-    // 16384 = gpt-4o-mini's documented max output. Headful Playwright produces
-    // larger cleanText (in-browser popups, fully rendered nav), and with
-    // detailUrl in the schema each event JSON runs ~150-200 tokens. 40 events
-    // can easily exceed 8192 → finish=length → truncated JSON → parseError.
-    max_tokens: 16384,
-    messages: [
-      { role: 'system', content: extractionPrompt },
-      { role: 'user', content: `Extract all upcoming events from this page content:\n\n${cleanText}` },
-    ],
-  });
-  const rawText = response.choices[0]?.message?.content || '';
-  const promptTokens = response.usage?.prompt_tokens ?? 0;
-  const completionTokens = response.usage?.completion_tokens ?? 0;
-  const totalTokens = response.usage?.total_tokens ?? 0;
-  const finishReason = response.choices[0]?.finish_reason || 'unknown';
-  const base = { rawText, promptTokens, completionTokens, totalTokens, finishReason };
+  // Heartbeat every 15s so admin and logs show the backend is alive while
+  // gpt-4o-mini silently chews through 5-10k tokens of input. Without this
+  // there's a 1-3 minute gap between 'generated_prompt' and 'validation=N'
+  // that looks identical to a hang from the UI.
+  const hbStart = Date.now();
+  const heartbeat = setInterval(() => {
+    const secs = Math.round((Date.now() - hbStart) / 1000);
+    logger.info(`[analyze] validation LLM still running (${secs}s elapsed)`);
+  }, 15000);
   try {
-    const match = rawText.match(/\[[\s\S]*\]/);
-    if (!match) return { ...base, count: 0, parseError: 'no-json-array-found' };
-    const arr = JSON.parse(match[0]);
-    if (!Array.isArray(arr)) return { ...base, count: 0, parseError: 'not-an-array' };
-    return { ...base, count: arr.length };
-  } catch (err: any) {
-    return { ...base, count: 0, parseError: err?.message || 'json-parse-failed' };
+    const response = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      // 16384 = gpt-4o-mini's documented max output. Headful Playwright produces
+      // larger cleanText (in-browser popups, fully rendered nav), and with
+      // detailUrl in the schema each event JSON runs ~150-200 tokens. 40 events
+      // can easily exceed 8192 → finish=length → truncated JSON → parseError.
+      max_tokens: 16384,
+      messages: [
+        { role: 'system', content: extractionPrompt },
+        { role: 'user', content: `Extract all upcoming events from this page content:\n\n${cleanText}` },
+      ],
+    });
+    const rawText = response.choices[0]?.message?.content || '';
+    const promptTokens = response.usage?.prompt_tokens ?? 0;
+    const completionTokens = response.usage?.completion_tokens ?? 0;
+    const totalTokens = response.usage?.total_tokens ?? 0;
+    const finishReason = response.choices[0]?.finish_reason || 'unknown';
+    const base = { rawText, promptTokens, completionTokens, totalTokens, finishReason };
+    try {
+      const match = rawText.match(/\[[\s\S]*\]/);
+      if (!match) return { ...base, count: 0, parseError: 'no-json-array-found' };
+      const arr = JSON.parse(match[0]);
+      if (!Array.isArray(arr)) return { ...base, count: 0, parseError: 'not-an-array' };
+      return { ...base, count: arr.length };
+    } catch (err: any) {
+      return { ...base, count: 0, parseError: err?.message || 'json-parse-failed' };
+    }
+  } finally {
+    clearInterval(heartbeat);
   }
 }
