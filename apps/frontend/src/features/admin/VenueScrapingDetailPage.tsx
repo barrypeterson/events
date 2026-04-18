@@ -16,6 +16,8 @@ import {
   Copy,
   Check,
   Sparkles,
+  FileText,
+  Ticket,
 } from 'lucide-react'
 
 function StatusBadge({ status }: { status: string | null | undefined }) {
@@ -428,6 +430,34 @@ function EventRow({ event, onAfterEnrich }: {
             <div className="ml-5 mt-0.5 text-xs text-muted-foreground">
               <Timestamp date={event.startDateTime} />
               {event.category?.length > 0 && <span className="ml-2">{event.category.join(', ')}</span>}
+
+              {/* URL presence icons — click through to see the target. */}
+              {event.detailUrl && (
+                <a
+                  href={event.detailUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="ml-2 inline-flex items-center gap-0.5 text-emerald-700 hover:underline"
+                  title={`detailUrl: ${event.detailUrl}`}
+                >
+                  <FileText className="h-3 w-3" />
+                  <span className="max-w-[200px] truncate">{hostOf(event.detailUrl) || 'detail'}</span>
+                </a>
+              )}
+              {event.ticketUrl && (
+                <a
+                  href={event.ticketUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="ml-2 inline-flex items-center gap-0.5 text-slate-600 hover:underline"
+                  title={`ticketUrl: ${event.ticketUrl}`}
+                >
+                  <Ticket className="h-3 w-3" />
+                  <span className="max-w-[200px] truncate">{hostOf(event.ticketUrl) || 'ticket'}</span>
+                </a>
+              )}
 
               {/* Current enrichment state — shown BEFORE the user clicks. */}
               {prediction.kind === 'enriched' && (
