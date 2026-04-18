@@ -213,16 +213,16 @@ export function VenueScrapingDetailPage() {
             <p className="text-sm text-muted-foreground">No runs yet.</p>
           )}
           {runsQuery.data && runsQuery.data.length > 0 && (
-            <table className="w-full text-sm">
+            <table className="w-full border-separate border-spacing-x-4 text-sm">
               <thead>
-                <tr className="border-b text-left text-xs text-muted-foreground">
-                  <th className="py-2">Started</th>
-                  <th>Status</th>
-                  <th className="text-right">Found</th>
-                  <th className="text-right">New</th>
-                  <th className="text-right">Updated</th>
-                  <th>Duration</th>
-                  <th>Error</th>
+                <tr className="text-left text-xs text-muted-foreground">
+                  <th className="py-2 font-normal">Started</th>
+                  <th className="font-normal">Status</th>
+                  <th className="text-right font-normal">Found</th>
+                  <th className="text-right font-normal">New</th>
+                  <th className="text-right font-normal">Updated</th>
+                  <th className="text-right font-normal">Duration</th>
+                  <th className="font-normal">Error</th>
                 </tr>
               </thead>
               <tbody>
@@ -231,13 +231,13 @@ export function VenueScrapingDetailPage() {
                     ? `${Math.round((new Date(run.completedAt).getTime() - new Date(run.startedAt).getTime()) / 1000)}s`
                     : '—'
                   return (
-                    <tr key={run.id} className="border-b last:border-0">
+                    <tr key={run.id} className="border-t">
                       <td className="py-2"><Timestamp date={run.startedAt} /></td>
                       <td><StatusBadge status={run.status} /></td>
-                      <td className="text-right">{run.eventsFound}</td>
-                      <td className="text-right text-green-600">{run.eventsNew}</td>
-                      <td className="text-right text-blue-600">{run.eventsUpdated}</td>
-                      <td>{duration}</td>
+                      <td className="text-right tabular-nums">{run.eventsFound}</td>
+                      <td className="text-right tabular-nums text-green-600">{run.eventsNew}</td>
+                      <td className="text-right tabular-nums text-blue-600">{run.eventsUpdated}</td>
+                      <td className="text-right tabular-nums text-muted-foreground">{duration}</td>
                       <td className="max-w-xs truncate text-xs text-destructive" title={run.errorMessage || ''}>
                         {run.errorMessage || ''}
                       </td>
