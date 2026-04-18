@@ -108,10 +108,20 @@ export const venueScrapingRouter = router({
     .mutation(async ({ input }) => {
       // Dynamic import to avoid loading Playwright in the backend at startup
       const { analyzeVenue } = await import('../../../../../../apps/agents/src/scrapers/venue-analyzer');
+      const { logger } = await import('../../../lib/logger');
+      const handlerStart = Date.now();
+      logger.info(`[trpc] analyzeVenue handler START configId=${input.configId}`);
       try {
         const analysis = await analyzeVenue(input.configId);
+        const handlerMs = Date.now() - handlerStart;
+        logger.info(
+          `[trpc] analyzeVenue handler END configId=${input.configId} ms=${handlerMs} sample_events=${analysis.sampleEventCount}`,
+        );
         return { success: true, sampleEventCount: analysis.sampleEventCount };
       } catch (err: any) {
+        logger.error(
+          `[trpc] analyzeVenue handler ERROR configId=${input.configId} ms=${Date.now() - handlerStart} error="${err?.message || err}"`,
+        );
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: `Analysis failed: ${err.message}`,

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { trpc } from '@/lib/trpc'
 import {
   Table,
@@ -39,6 +39,16 @@ function StatusBadge({ status }: { status: string | null | undefined }) {
   }
 }
 
+function ElapsedSeconds({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+  const secs = Math.floor((now - startedAt) / 1000)
+  return <>{secs}s</>
+}
+
 function TimeAgo({ date }: { date: string | null | undefined }) {
   if (!date) return <span className="text-xs text-muted-foreground">Never</span>
   const d = new Date(date)
@@ -58,7 +68,7 @@ function TimeAgo({ date }: { date: string | null | undefined }) {
 }
 
 export function VenueScrapingPage() {
-  const [activeAction, setActiveAction] = useState<{ id: string; type: 'analyze' | 'refresh' } | null>(null)
+  const [activeAction, setActiveAction] = useState<{ id: string; type: 'analyze' | 'refresh'; startedAt: number } | null>(null)
   const [editingUrl, setEditingUrl] = useState<{ id: string; url: string } | null>(null)
   const configs = trpc.venueScraping.listConfigs.useQuery()
   const toggleMutation = trpc.venueScraping.toggleScraping.useMutation({
@@ -220,10 +230,12 @@ export function VenueScrapingPage() {
                       )}
                     </TableCell>
                     <TableCell>
-                      {activeAction?.id === config.id && activeAction.type === 'analyze' ? (
+                      {activeAction && activeAction.id === config.id && activeAction.type === 'analyze' ? (
                         <div className="flex items-center gap-1">
                           <RefreshCw className="h-3.5 w-3.5 animate-spin text-primary" />
-                          <span className="text-xs text-primary">Analyzing...</span>
+                          <span className="text-xs text-primary">
+                            Analyzing… <ElapsedSeconds startedAt={activeAction.startedAt} />
+                          </span>
                         </div>
                       ) : hasAnalysis ? (
                         <div className="flex items-center gap-1">
@@ -240,9 +252,9 @@ export function VenueScrapingPage() {
                       )}
                     </TableCell>
                     <TableCell>
-                      {activeAction?.id === config.id && activeAction.type === 'refresh' ? (
+                      {activeAction && activeAction.id === config.id && activeAction.type === 'refresh' ? (
                         <Badge className="bg-blue-100 text-blue-700 text-xs">
-                          <RefreshCw className="mr-1 h-3 w-3 animate-spin" /> Running
+                          <RefreshCw className="mr-1 h-3 w-3 animate-spin" /> Running <ElapsedSeconds startedAt={activeAction.startedAt} />
                         </Badge>
                       ) : (
                         <StatusBadge status={config.lastRefreshStatus} />
@@ -273,7 +285,7 @@ export function VenueScrapingPage() {
                           variant="outline"
                           size="sm"
                           onClick={() => {
-                            setActiveAction({ id: config.id, type: 'analyze' })
+                            setActiveAction({ id: config.id, type: 'analyze', startedAt: Date.now() })
                             analyzeMutation.mutate({ configId: config.id })
                           }}
                           disabled={!!activeAction}
@@ -285,7 +297,7 @@ export function VenueScrapingPage() {
                           variant="outline"
                           size="sm"
                           onClick={() => {
-                            setActiveAction({ id: config.id, type: 'refresh' })
+                            setActiveAction({ id: config.id, type: 'refresh', startedAt: Date.now() })
                             refreshMutation.mutate({ configId: config.id })
                           }}
                           disabled={!hasAnalysis || !!activeAction}
