@@ -360,10 +360,13 @@ export const venueScrapingRouter = router({
    * Enrich a single event with detail page data
    */
   enrichEvent: publicProcedure
-    .input(z.object({ eventId: z.string().uuid() }))
+    .input(z.object({
+      eventId: z.string().uuid(),
+      force: z.boolean().optional().default(false),
+    }))
     .mutation(async ({ input }) => {
       const { enrichEventDetails } = await import('../../../../../../apps/agents/src/lib/event-enricher');
-      const result = await enrichEventDetails(input.eventId);
+      const result = await enrichEventDetails(input.eventId, { force: input.force });
       return { success: result };
     }),
 

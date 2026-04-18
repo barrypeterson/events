@@ -387,16 +387,20 @@ function EventRow({ event, onAfterEnrich }: {
         <Button
           variant="ghost"
           size="sm"
-          disabled={enrichMutation.isPending || enriched}
-          onClick={() => enrichMutation.mutate({ eventId: event.id })}
-          title={enriched ? 'Already enriched' : 'Fetch the detail page and fill in description, lineup, door time, age'}
+          disabled={enrichMutation.isPending}
+          onClick={() => enrichMutation.mutate({ eventId: event.id, force: enriched })}
+          title={
+            enriched
+              ? 'Re-enrich: ignore the already_enriched flag and overwrite description, lineup, door time, age'
+              : 'Fetch the detail page and fill in description, lineup, door time, age'
+          }
         >
           <Sparkles className={`h-3.5 w-3.5 ${enrichMutation.isPending ? 'animate-pulse' : ''}`} />
           <span className="ml-1 text-xs">
-            {enrichMutation.isPending ? 'Enriching…'
+            {enrichMutation.isPending ? (enriched ? 'Re-enriching…' : 'Enriching…')
               : enrichMutation.data
                 ? (enrichMutation.data.success ? 'Enriched ✓' : 'Skipped')
-                : 'Enrich'}
+                : enriched ? 'Re-enrich' : 'Enrich'}
           </span>
         </Button>
       </div>

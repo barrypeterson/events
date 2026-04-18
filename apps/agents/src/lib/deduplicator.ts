@@ -533,21 +533,43 @@ async function createEvent(
  */
 async function updateEvent(eventId: string, event: NormalizedEvent): Promise<void> {
   try {
+    // Preserve existing rich-data fields when the new scrape has nothing
+    // to offer. The scraper LLM occasionally misses the image marker or
+    // returns a thin description; without this guard every refresh would
+    // overwrite enrichment-added data (description, ageRestriction) and
+    // previously-stored S3 image URLs with empty values.
+    const existing = await prisma.event.findUnique({
+      where: { id: eventId },
+      select: {
+        images: true,
+        description: true,
+        ticketUrl: true,
+        detailUrl: true,
+        ageRestriction: true,
+      },
+    });
+
+    const hasImages = Array.isArray(event.images) && event.images.length > 0;
+    const hasDescription = typeof event.description === 'string' && event.description.trim().length > 20;
+
     await prisma.event.update({
       where: { id: eventId },
       data: {
         title: event.title,
         normalizedTitle: event.normalizedTitle,
-        description: event.description,
+        // Keep existing description if new one is empty or much thinner.
+        description: hasDescription ? event.description : existing?.description ?? event.description,
         startDateTime: event.startDateTime,
         endDateTime: event.endDateTime,
-        images: event.images,
-        ticketUrl: event.ticketUrl,
-        detailUrl: event.detailUrl,
+        // Keep existing images if new scrape returned none — scraper may
+        // simply have missed the [IMAGE: ...] marker on this pass.
+        images: hasImages ? event.images : existing?.images ?? event.images,
+        ticketUrl: event.ticketUrl ?? existing?.ticketUrl ?? null,
+        detailUrl: event.detailUrl ?? existing?.detailUrl ?? null,
         priceMin: event.priceMin,
         priceMax: event.priceMax,
         isFree: event.isFree,
-        ageRestriction: event.ageRestriction,
+        ageRestriction: event.ageRestriction ?? existing?.ageRestriction ?? null,
         category: event.category,
         tags: event.tags,
         updatedAt: new Date(),

@@ -65,8 +65,12 @@ If the page doesn't contain meaningful event details, return: {"description": nu
  * Enrich a single event by visiting its detail page.
  * Extracts description, door time, age restriction, lineup, and ticket URL.
  */
-export async function enrichEventDetails(eventId: string): Promise<boolean> {
+export async function enrichEventDetails(
+  eventId: string,
+  opts?: { force?: boolean },
+): Promise<boolean> {
   const start = Date.now();
+  const force = opts?.force === true;
   const event = await prisma.event.findUnique({
     where: { id: eventId },
     select: {
@@ -87,9 +91,12 @@ export async function enrichEventDetails(eventId: string): Promise<boolean> {
   const titleShort = (event.title || '').slice(0, 60);
 
   const meta = (event.metadata as any) || {};
-  if (meta.enrichedAt) {
+  if (meta.enrichedAt && !force) {
     logger.debug(`[enrich] event_id=${eventId} SKIP reason=already_enriched title="${titleShort}"`);
     return false;
+  }
+  if (meta.enrichedAt && force) {
+    logger.info(`[enrich] event_id=${eventId} FORCE re-enriching previously-enriched event`);
   }
 
   // Prefer detailUrl (venue's own page). Fall back to ticketUrl only if
