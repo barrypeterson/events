@@ -218,9 +218,11 @@ async function runValidation(
 }> {
   const response = await client.chat.completions.create({
     model: 'gpt-4o-mini',
-    // Bumped from 4096: if the prior cap was the problem, 8192 gives 2x head-
-    // room for ~40 events (each JSON object is ~100-150 tokens with our schema).
-    max_tokens: 8192,
+    // 16384 = gpt-4o-mini's documented max output. Headful Playwright produces
+    // larger cleanText (in-browser popups, fully rendered nav), and with
+    // detailUrl in the schema each event JSON runs ~150-200 tokens. 40 events
+    // can easily exceed 8192 → finish=length → truncated JSON → parseError.
+    max_tokens: 16384,
     messages: [
       { role: 'system', content: extractionPrompt },
       { role: 'user', content: `Extract all upcoming events from this page content:\n\n${cleanText}` },

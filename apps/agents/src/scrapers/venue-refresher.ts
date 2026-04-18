@@ -79,10 +79,10 @@ export async function refreshVenue(configId: string): Promise<ScraperStats> {
     const client = getOpenAI();
     const extractResponse = await client.chat.completions.create({
       model: config.refreshModel || 'gpt-4o-mini',
-      // 8192 matches the analyzer validation cap — a full venue's event array
-      // can easily exceed 4k tokens, and truncation yields malformed JSON
-      // which our parser drops to raw=0.
-      max_tokens: 8192,
+      // 16384 = gpt-4o-mini's documented max output. Matches analyzer
+      // validation cap. Headful rendering + detailUrl schema can easily
+      // exceed 8k output tokens for ~40 events.
+      max_tokens: 16384,
       messages: [
         { role: 'system', content: analysis.extractionPrompt },
         { role: 'user', content: `Extract all upcoming events from this page content. Image URLs appear as [IMAGE: url] markers near their associated event.\n\n${cleanText}` },
