@@ -366,8 +366,7 @@ export const venueScrapingRouter = router({
     }))
     .mutation(async ({ input }) => {
       const { enrichEventDetails } = await import('../../../../../../apps/agents/src/lib/event-enricher');
-      const result = await enrichEventDetails(input.eventId, { force: input.force });
-      return { success: result };
+      return enrichEventDetails(input.eventId, { force: input.force });
     }),
 
   /**

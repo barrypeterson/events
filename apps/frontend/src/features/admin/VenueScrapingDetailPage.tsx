@@ -29,6 +29,52 @@ function StatusBadge({ status }: { status: string | null | undefined }) {
   }
 }
 
+// Kept in sync with TICKET_PROVIDER_DOMAINS in
+// apps/agents/src/lib/event-enricher.ts and
+// apps/backend/src/api/trpc/routes/venue-scraping.ts — hosts the enricher
+// will skip outright. This copy lets us label skip predictions client-side
+// without an extra round-trip. If the list moves, update all three.
+const TICKET_PROVIDER_HOSTS = new Set([
+  'ticketmaster.com', 'www.ticketmaster.com',
+  'axs.com', 'www.axs.com',
+  'eventbrite.com', 'www.eventbrite.com',
+  'prekindle.com', 'www.prekindle.com',
+  'seetickets.us', 'www.seetickets.us',
+  'etix.com', 'www.etix.com',
+  'dice.fm', 'www.dice.fm',
+  'livenation.com', 'www.livenation.com',
+  'stubhub.com', 'www.stubhub.com',
+  'vividseats.com', 'www.vividseats.com',
+])
+
+function hostOf(url: string | null | undefined): string | null {
+  if (!url) return null
+  try { return new URL(url).hostname.toLowerCase() } catch { return null }
+}
+
+type EnrichmentPrediction =
+  | { kind: 'enriched' }
+  | { kind: 'eligible'; via: 'detail' | 'ticket' }
+  | { kind: 'skipped'; reason: 'no_url' | 'third_party_ticket_only'; host?: string }
+
+function predictEnrichment(event: {
+  detailUrl: string | null
+  ticketUrl: string | null
+  metadata: unknown
+}): EnrichmentPrediction {
+  const meta = (event.metadata as any) || {}
+  if (meta.enrichedAt) return { kind: 'enriched' }
+  if (event.detailUrl) return { kind: 'eligible', via: 'detail' }
+  if (event.ticketUrl) {
+    const host = hostOf(event.ticketUrl)
+    if (host && TICKET_PROVIDER_HOSTS.has(host)) {
+      return { kind: 'skipped', reason: 'third_party_ticket_only', host }
+    }
+    return { kind: 'eligible', via: 'ticket' }
+  }
+  return { kind: 'skipped', reason: 'no_url' }
+}
+
 function Timestamp({ date }: { date: string | Date | null | undefined }) {
   if (!date) return <span className="text-muted-foreground">—</span>
   const d = typeof date === 'string' ? new Date(date) : date
@@ -362,6 +408,11 @@ function EventRow({ event, onAfterEnrich }: {
     onSuccess: () => onAfterEnrich(),
   })
 
+  const result = enrichMutation.data
+  const skipReason = result && !result.success ? result.reason : null
+  const skipDetail = result && !result.success ? (result as any).detail : null
+  const prediction = predictEnrichment(event)
+
   return (
     <div className="border-b last:border-0">
       <div className="flex w-full items-start justify-between gap-4 py-2">
@@ -377,9 +428,39 @@ function EventRow({ event, onAfterEnrich }: {
             <div className="ml-5 mt-0.5 text-xs text-muted-foreground">
               <Timestamp date={event.startDateTime} />
               {event.category?.length > 0 && <span className="ml-2">{event.category.join(', ')}</span>}
-              {enriched && <Badge className="ml-2 bg-green-100 text-green-700 text-[10px]">Enriched</Badge>}
-              {enrichMutation.data && enrichMutation.data.success === false && (
-                <Badge variant="destructive" className="ml-2 text-[10px]">Skipped</Badge>
+
+              {/* Current enrichment state — shown BEFORE the user clicks. */}
+              {prediction.kind === 'enriched' && (
+                <Badge className="ml-2 bg-green-100 text-green-700 text-[10px]">Enriched</Badge>
+              )}
+              {prediction.kind === 'eligible' && (
+                <Badge variant="outline" className="ml-2 text-[10px]" title={`Will enrich via ${prediction.via}Url`}>
+                  Eligible · {prediction.via}
+                </Badge>
+              )}
+              {prediction.kind === 'skipped' && (
+                <Badge
+                  variant="outline"
+                  className="ml-2 text-[10px] border-amber-300 bg-amber-50 text-amber-800"
+                  title={
+                    prediction.reason === 'third_party_ticket_only'
+                      ? `Only ticket URL is on ${prediction.host}, which blocks scrapers. Add a detailUrl (venue's own page) by re-running refresh after re-analyze.`
+                      : 'This event has no scrapable URL (neither detailUrl nor ticketUrl).'
+                  }
+                >
+                  Would skip · {prediction.reason}{prediction.host ? ` · ${prediction.host}` : ''}
+                </Badge>
+              )}
+
+              {/* Actual outcome after clicking the Enrich button. */}
+              {skipReason && (
+                <Badge
+                  variant="destructive"
+                  className="ml-2 text-[10px]"
+                  title={skipDetail || undefined}
+                >
+                  Skipped · {skipReason}{skipDetail ? ` · ${skipDetail}` : ''}
+                </Badge>
               )}
             </div>
           </div>

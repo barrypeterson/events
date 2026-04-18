@@ -65,10 +65,27 @@ If the page doesn't contain meaningful event details, return: {"description": nu
  * Enrich a single event by visiting its detail page.
  * Extracts description, door time, age restriction, lineup, and ticket URL.
  */
+export type EnrichmentOutcome =
+  | { success: true }
+  | {
+      success: false;
+      reason:
+        | 'not_found'
+        | 'already_enriched'
+        | 'no_url'
+        | 'third_party_ticket_only'
+        | 'http_status'
+        | 'thin_content'
+        | 'parse_failed'
+        | 'no_description'
+        | 'exception';
+      detail?: string;
+    };
+
 export async function enrichEventDetails(
   eventId: string,
   opts?: { force?: boolean },
-): Promise<boolean> {
+): Promise<EnrichmentOutcome> {
   const start = Date.now();
   const force = opts?.force === true;
   const event = await prisma.event.findUnique({
@@ -85,7 +102,7 @@ export async function enrichEventDetails(
 
   if (!event) {
     logger.warn(`[enrich] event_id=${eventId} SKIP reason=not_found`);
-    return false;
+    return { success: false, reason: 'not_found' };
   }
 
   const titleShort = (event.title || '').slice(0, 60);
@@ -93,7 +110,7 @@ export async function enrichEventDetails(
   const meta = (event.metadata as any) || {};
   if (meta.enrichedAt && !force) {
     logger.debug(`[enrich] event_id=${eventId} SKIP reason=already_enriched title="${titleShort}"`);
-    return false;
+    return { success: false, reason: 'already_enriched' };
   }
   if (meta.enrichedAt && force) {
     logger.info(`[enrich] event_id=${eventId} FORCE re-enriching previously-enriched event`);
@@ -114,13 +131,14 @@ export async function enrichEventDetails(
 
   if (!enrichUrl) {
     if (event.ticketUrl && isTicketProvider(event.ticketUrl)) {
+      const host = hostnameOf(event.ticketUrl) || undefined;
       logger.info(
-        `[enrich] event_id=${eventId} SKIP reason=third_party_ticket_only host=${hostnameOf(event.ticketUrl)} title="${titleShort}"`,
+        `[enrich] event_id=${eventId} SKIP reason=third_party_ticket_only host=${host} title="${titleShort}"`,
       );
-    } else {
-      logger.debug(`[enrich] event_id=${eventId} SKIP reason=no_url title="${titleShort}"`);
+      return { success: false, reason: 'third_party_ticket_only', detail: host };
     }
-    return false;
+    logger.debug(`[enrich] event_id=${eventId} SKIP reason=no_url title="${titleShort}"`);
+    return { success: false, reason: 'no_url' };
   }
 
   logger.info(
@@ -134,14 +152,14 @@ export async function enrichEventDetails(
       logger.warn(
         `[enrich] event_id=${eventId} ABORT reason=http_status status=${status} ms=${Date.now() - start}`,
       );
-      return false;
+      return { success: false, reason: 'http_status', detail: `HTTP ${status}` };
     }
 
     if (cleanText.length < 50) {
       logger.warn(
         `[enrich] event_id=${eventId} ABORT reason=thin_content clean=${cleanText.length} ms=${Date.now() - start}`,
       );
-      return false;
+      return { success: false, reason: 'thin_content', detail: `${cleanText.length} chars` };
     }
 
     // Send to LLM for extraction
@@ -166,14 +184,14 @@ export async function enrichEventDetails(
       logger.warn(
         `[enrich] event_id=${eventId} ABORT reason=parse_failed tokens=${llmTokens} llm_ms=${Date.now() - llmStart} error="${err?.message || err}"`,
       );
-      return false;
+      return { success: false, reason: 'parse_failed', detail: err?.message || String(err) };
     }
 
     if (!details || !details.description) {
       logger.warn(
         `[enrich] event_id=${eventId} ABORT reason=no_description tokens=${llmTokens} llm_ms=${Date.now() - llmStart}`,
       );
-      return false;
+      return { success: false, reason: 'no_description' };
     }
 
     // Update event with enriched data
@@ -197,13 +215,13 @@ export async function enrichEventDetails(
     logger.info(
       `[enrich] event_id=${eventId} DONE desc_len=${details.description.length} lineup=${(details.lineup || []).length} door_time=${details.doorTime ? 'yes' : 'no'} age=${details.ageRestriction ? 'yes' : 'no'} tokens=${llmTokens} total_ms=${Date.now() - start}`,
     );
-    return true;
+    return { success: true };
 
   } catch (err: any) {
     logger.error(
       `[enrich] event_id=${eventId} FAILED ms=${Date.now() - start} error="${err?.message || err}"`,
     );
-    return false;
+    return { success: false, reason: 'exception', detail: err?.message || String(err) };
   }
 }
 
@@ -242,7 +260,7 @@ export async function enrichUnenrichedEvents(limit: number = 50): Promise<{ enri
   for (const event of events) {
     try {
       const result = await enrichEventDetails(event.id);
-      if (result) {
+      if (result.success) {
         enriched++;
       } else {
         skipped++;
