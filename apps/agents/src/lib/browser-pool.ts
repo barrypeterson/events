@@ -74,9 +74,18 @@ class BrowserPool {
     const args = [...LAUNCH_ARGS];
     if (isContainer) args.push('--no-sandbox');
 
+    // Local debugging: set SCRAPER_HEADLESS=false to watch the browser run.
+    // SCRAPER_SLOWMO=250 adds a 250ms delay per Playwright action so you can
+    // follow what's happening. SCRAPER_DEVTOOLS=true auto-opens DevTools.
+    const headless = process.env.SCRAPER_HEADLESS !== 'false';
+    const slowMo = parseInt(process.env.SCRAPER_SLOWMO || '0', 10) || 0;
+    const devtools = process.env.SCRAPER_DEVTOOLS === 'true';
+
     this.launching = chromiumExtra
       .launch({
-        headless: true,
+        headless,
+        slowMo,
+        devtools,
         args,
         // Hides the '--enable-automation' default flag that advertises CDP control.
         ignoreDefaultArgs: ['--enable-automation'],
@@ -88,7 +97,9 @@ class BrowserPool {
           logger.warn('Browser disconnected, will relaunch on next request');
           this.browser = null;
         });
-        logger.info('Browser pool: stealth Chromium launched');
+        logger.info(
+          `Browser pool: stealth Chromium launched (headless=${headless} slowMo=${slowMo} devtools=${devtools})`,
+        );
         return browser;
       });
 

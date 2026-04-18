@@ -516,10 +516,14 @@ async function runNavigation(
   useProxy: boolean,
 ): Promise<NavigationOutcome> {
   const pageType = analysis?.pageType;
-  const canFetch = pageType === 'static' || pageType === undefined || pageType === null;
+  // SCRAPER_FORCE_BROWSER=true skips the fetch-first optimization so the
+  // Playwright path always runs — useful for watching a scrape live
+  // (headful Chromium via SCRAPER_HEADLESS=false) on otherwise-static pages.
+  const forceBrowser = process.env.SCRAPER_FORCE_BROWSER === 'true';
+  const canFetch = !forceBrowser && (pageType === 'static' || pageType === undefined || pageType === null);
 
   logger.info(
-    `[navigate] ${url} start pageType=${pageType ?? 'unknown'} canFetch=${canFetch} useProxy=${useProxy}`,
+    `[navigate] ${url} start pageType=${pageType ?? 'unknown'} canFetch=${canFetch} useProxy=${useProxy}${forceBrowser ? ' forceBrowser=true' : ''}`,
   );
 
   let lastStatus = 0;
