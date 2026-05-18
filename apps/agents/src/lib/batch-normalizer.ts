@@ -3,6 +3,28 @@ import { logger, cleanText, normalizeString } from './scraper-utils';
 import { getOpenAI } from './openai-client';
 
 /**
+ * The LLM is fed a cleanText that has [IMAGE: url] / [LINK: url] markers and
+ * is asked to return the URL inside them. Some prompts (or sloppier model
+ * passes) come back with the entire marker as the "URL" — leading to stored
+ * values like "[IMAGE: https://.../693.jpg]" that 404 when the frontend
+ * renders them in an <img src>. Strip the marker brackets defensively so the
+ * pipeline can't store a broken URL regardless of what the model emits.
+ */
+function unwrapMarker(value: string | null | undefined): string | null {
+  if (!value || typeof value !== 'string') return null;
+  let v = value.trim();
+  // Match `[IMAGE: ...]` or `[LINK: ...]` (case insensitive)
+  const m = v.match(/^\[(?:IMAGE|LINK):\s*(.+?)\s*\]$/i);
+  if (m) v = m[1].trim();
+  // Some models also strip just the bracket without the prefix (e.g. `[https://...]`)
+  if (v.startsWith('[') && v.endsWith(']')) {
+    const inner = v.slice(1, -1).trim();
+    if (inner.startsWith('http')) v = inner;
+  }
+  return v || null;
+}
+
+/**
  * Normalize all raw events in a single LLM call.
  * Replaces the N+1 pattern of calling normalizeEvent() per event.
  */
@@ -73,6 +95,9 @@ ${JSON.stringify(eventsJson, null, 2)}`;
 
     const mapped = normalized.map((n: any, i: number) => {
       const raw = rawEvents[i] || rawEvents[0];
+      const cleanImage = unwrapMarker(raw.imageUrl);
+      const cleanTicket = unwrapMarker(raw.url);
+      const cleanDetail = unwrapMarker(raw.detailUrl);
       return {
         title: cleanText(n.title || raw.title),
         normalizedTitle: normalizeString(n.title || raw.title),
@@ -83,9 +108,9 @@ ${JSON.stringify(eventsJson, null, 2)}`;
         venueName: n.venueName || venueName,
         category: Array.isArray(n.category) ? n.category : ['OTHER'],
         tags: Array.isArray(n.tags) ? n.tags : [],
-        images: raw.imageUrl ? [raw.imageUrl] : [],
-        ticketUrl: raw.url || undefined,
-        detailUrl: raw.detailUrl || undefined,
+        images: cleanImage ? [cleanImage] : [],
+        ticketUrl: cleanTicket || undefined,
+        detailUrl: cleanDetail || undefined,
         priceMin: n.priceMin ?? undefined,
         priceMax: n.priceMax ?? undefined,
         isFree: n.isFree ?? false,
