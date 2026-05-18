@@ -332,12 +332,19 @@ function cleanHtmlString(html: string, baseUrl: string): string {
           }
         }
       }
-      const style = attrs?.match(/\bstyle=["']([^"']+)["']/i)?.[1];
-      if (style?.includes('background-image')) {
-        const url = style.match(/url\(['"]?(https?:\/\/[^'")\s]+)['"]?\)/)?.[1];
-        if (url && !skipImg.test(url) && !seenImg.has(url)) {
-          seenImg.add(url);
-          out.push(`[IMAGE: ${url}]`);
+      // Background images appear in inline style attributes. The old regex
+      // (`style=["']([^"']+)["']`) broke whenever the inner CSS used the
+      // OTHER quote — e.g. `style="background-image: url('https://...')"`
+      // would terminate at the first inner `'` and lose the URL. Just look
+      // for the pattern anywhere in the attrs string instead.
+      if (attrs && attrs.includes('background-image')) {
+        const bg = attrs.match(/background-image\s*:\s*url\(\s*['"]?(https?:\/\/[^'")\s]+)['"]?\s*\)/i);
+        if (bg) {
+          const url = bg[1];
+          if (!skipImg.test(url) && !seenImg.has(url)) {
+            seenImg.add(url);
+            out.push(`[IMAGE: ${url}]`);
+          }
         }
       }
     } else if (text) {
