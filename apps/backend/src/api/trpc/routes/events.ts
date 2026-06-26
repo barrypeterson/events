@@ -28,6 +28,13 @@ import {
   getRecurringPatterns,
 } from '../../../services/recurring.service';
 import { EventCategory, EventStatus } from '@slo-events/database';
+import {
+  APP_TIMEZONE,
+  getZonedParts,
+  startOfDayInZone,
+  endOfDayInZone,
+  timeOfDayInZone,
+} from '../../../lib/timezone';
 
 // Validation schemas
 const eventCategorySchema = z.enum([
@@ -499,20 +506,24 @@ export const eventsRouter = router({
     const now = new Date();
     const twoHoursFromNow = new Date(now.getTime() + 2 * 60 * 60 * 1000);
 
-    // End of day: 11:59 PM today in local time, or 4 AM tomorrow if past midnight
-    const endOfDay = new Date(now);
-    if (now.getHours() < 4) {
-      // After midnight, show events through 4 AM
-      endOfDay.setHours(4, 0, 0, 0);
-    } else {
-      endOfDay.setHours(23, 59, 59, 999);
-    }
+    // Day boundaries are reckoned in the venues' timezone (Pacific), NOT the
+    // server's local zone. On Railway the server runs in UTC, so the old
+    // setHours()/getHours() math placed "end of today" at 23:59 UTC
+    // (≈4:59 PM Pacific) and dropped every Pacific-evening event. See
+    // lib/timezone.ts.
+    const { hour: localHour } = getZonedParts(now, APP_TIMEZONE);
+
+    // End of day: 11:59 PM tonight (Pacific), or 4 AM today if we're past
+    // midnight but before 4 AM.
+    const endOfDay =
+      localHour < 4
+        ? timeOfDayInZone(now, 4, 0, 0, 0, APP_TIMEZONE)
+        : endOfDayInZone(now, APP_TIMEZONE);
 
     // "Happening now" means started TODAY, not months ago.
     // Programs with far-future endDateTime (e.g., semester-long classes)
     // are not "happening now" events.
-    const startOfToday = new Date(now);
-    startOfToday.setHours(0, 0, 0, 0);
+    const startOfToday = startOfDayInZone(now, APP_TIMEZONE);
     const threeHoursAgo = new Date(now.getTime() - 3 * 60 * 60 * 1000);
 
     const include = {
@@ -569,18 +580,16 @@ export const eventsRouter = router({
   weekend: publicProcedure.query(async () => {
     const { prisma } = await import('@slo-events/database');
     const now = new Date();
-    const dayOfWeek = now.getDay(); // 0=Sun, 6=Sat
+    // Weekday and day boundaries are reckoned in Pacific, not the server's
+    // (UTC on Railway) local zone. See lib/timezone.ts.
+    const dayOfWeek = getZonedParts(now, APP_TIMEZONE).weekday; // 0=Sun, 6=Sat
 
-    // Find next Saturday (or today if already Saturday)
-    const saturday = new Date(now);
-    const daysUntilSat = dayOfWeek === 6 ? 0 : (6 - dayOfWeek);
-    saturday.setDate(now.getDate() + daysUntilSat);
-    saturday.setHours(0, 0, 0, 0);
+    // Find next Saturday (or today if already Saturday), midnight Pacific.
+    const daysUntilSat = dayOfWeek === 6 ? 0 : 6 - dayOfWeek;
+    const saturday = startOfDayInZone(now, APP_TIMEZONE, daysUntilSat);
 
-    // Sunday end
-    const sundayEnd = new Date(saturday);
-    sundayEnd.setDate(saturday.getDate() + 1);
-    sundayEnd.setHours(23, 59, 59, 999);
+    // Sunday end: 11:59:59.999 PM Pacific, the day after Saturday.
+    const sundayEnd = endOfDayInZone(now, APP_TIMEZONE, daysUntilSat + 1);
 
     const include = {
       venue: { select: { id: true, name: true, address: true, city: true } },
