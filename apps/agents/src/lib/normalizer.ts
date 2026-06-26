@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { RawEvent, NormalizedEvent, ClaudeEventSchema } from '../types';
 import { logger, cleanText, normalizeString } from './scraper-utils';
 import { enrichArtist } from './artist-enrichment';
+import { parseEventDate } from './timezone';
 
 /**
  * Map any category to a valid EventCategory enum value
@@ -88,12 +89,13 @@ export async function normalizeEvent(
     const parsed = JSON.parse(jsonMatch[0]);
     const validated = ClaudeEventSchema.parse(parsed);
 
-    // Convert to NormalizedEvent
-    // Parse dates - Claude returns ISO strings without timezone
-    // These represent Pacific Time, so we parse them as-is
-    // PostgreSQL will store them correctly with the timezone field
-    const startDateTime = new Date(validated.startDate);
-    const endDateTime = validated.endDate ? new Date(validated.endDate) : undefined;
+    // Convert to NormalizedEvent.
+    // The model returns a Pacific wall-clock string (usually without an
+    // offset). Interpret it in Pacific, NOT the process's local zone (UTC on
+    // Railway) — otherwise evening events shift earlier and get dropped as
+    // "past". See lib/timezone.ts.
+    const startDateTime = parseEventDate(validated.startDate);
+    const endDateTime = validated.endDate ? parseEventDate(validated.endDate) : undefined;
 
     const normalized: NormalizedEvent = {
       title: cleanText(validated.title),
@@ -170,7 +172,7 @@ function buildNormalizationPrompt(raw: RawEvent): string {
     '',
     'Required fields:',
     '- title: string (cleaned event title)',
-    '- startDate: string (ISO 8601 format with Pacific timezone, e.g., "2025-10-19T19:00:00-07:00" for PDT or "2025-10-19T19:00:00-08:00" for PST)',
+    '- startDate: string (Pacific Time local wall-clock, ISO 8601 WITHOUT any timezone offset or "Z", e.g., "2025-10-19T19:00:00"; do NOT convert to UTC)',
     '- venueName: string (venue or location name)',
     '- category: string[] (1-3 categories from: music, theater, sports, comedy, arts, food, community, nightlife, family, kids, education)',
     '- tags: string[] (2-5 relevant tags, lowercase)',

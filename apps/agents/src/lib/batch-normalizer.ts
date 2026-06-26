@@ -1,6 +1,7 @@
 import { RawEvent, NormalizedEvent } from '../types';
 import { logger, cleanText, normalizeString } from './scraper-utils';
 import { getOpenAI } from './openai-client';
+import { parseEventDate } from './timezone';
 
 /**
  * The LLM is fed a cleanText that has [IMAGE: url] / [LINK: url] markers and
@@ -54,8 +55,8 @@ DEFAULT VENUE: ${venueName}
 
 For each event, return:
 - title: cleaned event title
-- startDate: ISO 8601 datetime in Pacific Time (if only a date, default to 19:00)
-- endDate: ISO 8601 or null
+- startDate: Pacific Time local wall-clock as ISO 8601 WITHOUT any timezone offset or "Z", e.g. "2026-06-26T19:30:00" (if only a date is known, default the time to 19:00). Do NOT convert to UTC.
+- endDate: same format as startDate, or null
 - venueName: venue name
 - category: array of categories from [MUSIC, COMEDY, THEATER, SPORTS, FOOD_WINE, ARTS, COMMUNITY, FAMILY, KIDS, OUTDOOR, FITNESS, EDUCATION, BUSINESS, OTHER]
 - tags: array of relevant tags
@@ -102,8 +103,10 @@ ${JSON.stringify(eventsJson, null, 2)}`;
         title: cleanText(n.title || raw.title),
         normalizedTitle: normalizeString(n.title || raw.title),
         description: cleanText(n.description || ''),
-        startDateTime: new Date(n.startDate),
-        endDateTime: n.endDate ? new Date(n.endDate) : undefined,
+        // Interpret the model's Pacific wall-clock in Pacific, NOT the
+        // server's local zone (UTC on Railway) — see lib/timezone.ts.
+        startDateTime: parseEventDate(n.startDate),
+        endDateTime: n.endDate ? parseEventDate(n.endDate) : undefined,
         timezone: 'America/Los_Angeles',
         venueName: n.venueName || venueName,
         category: Array.isArray(n.category) ? n.category : ['OTHER'],
