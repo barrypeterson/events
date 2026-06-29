@@ -137,6 +137,9 @@ export function VenueScrapingDetailPage() {
   const refreshMutation = trpc.venueScraping.refreshVenue.useMutation({
     onSuccess: () => { configQuery.refetch(); runsQuery.refetch(); eventsQuery.refetch() },
   })
+  const setProxyMutation = trpc.venueScraping.setRequiresProxy.useMutation({
+    onSuccess: () => { configQuery.refetch() },
+  })
 
   if (configQuery.isLoading) {
     return (
@@ -209,7 +212,21 @@ export function VenueScrapingDetailPage() {
         <CardContent className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-4">
           <div><div className="text-muted-foreground text-xs">Status</div><StatusBadge status={config.lastRefreshStatus} /></div>
           <div><div className="text-muted-foreground text-xs">Scraping</div><Badge variant={config.scrapingEnabled ? 'default' : 'outline'} className="text-xs">{config.scrapingEnabled ? 'Enabled' : 'Disabled'}</Badge></div>
-          <div><div className="text-muted-foreground text-xs">Requires proxy</div><Badge variant={config.requiresProxy ? 'default' : 'outline'} className="text-xs">{config.requiresProxy ? 'Yes' : 'No'}</Badge></div>
+          <div>
+            <div className="text-muted-foreground text-xs">Requires proxy</div>
+            <Button
+              variant={config.requiresProxy ? 'default' : 'outline'}
+              size="sm"
+              className="mt-0.5 h-6 px-2 text-xs"
+              title="Click to toggle whether this venue is scraped through the proxy"
+              onClick={() => setProxyMutation.mutate({ configId, requiresProxy: !config.requiresProxy })}
+              disabled={setProxyMutation.isPending}
+            >
+              {setProxyMutation.isPending
+                ? <RefreshCw className="h-3 w-3 animate-spin" />
+                : config.requiresProxy ? 'Yes' : 'No'}
+            </Button>
+          </div>
           <div><div className="text-muted-foreground text-xs">Schedule</div><code className="text-xs">{config.schedule}</code></div>
           <div><div className="text-muted-foreground text-xs">Last analyzed</div><Timestamp date={config.analyzedAt} /></div>
           <div><div className="text-muted-foreground text-xs">Last refreshed</div><Timestamp date={config.lastRefreshedAt} /></div>
