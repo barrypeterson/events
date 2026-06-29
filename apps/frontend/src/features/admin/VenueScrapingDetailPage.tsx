@@ -214,18 +214,33 @@ export function VenueScrapingDetailPage() {
           <div><div className="text-muted-foreground text-xs">Scraping</div><Badge variant={config.scrapingEnabled ? 'default' : 'outline'} className="text-xs">{config.scrapingEnabled ? 'Enabled' : 'Disabled'}</Badge></div>
           <div>
             <div className="text-muted-foreground text-xs">Requires proxy</div>
-            <Button
-              variant={config.requiresProxy ? 'default' : 'outline'}
-              size="sm"
-              className="mt-0.5 h-6 px-2 text-xs"
-              title="Click to toggle whether this venue is scraped through the proxy"
-              onClick={() => setProxyMutation.mutate({ configId, requiresProxy: !config.requiresProxy })}
-              disabled={setProxyMutation.isPending}
-            >
-              {setProxyMutation.isPending
-                ? <RefreshCw className="h-3 w-3 animate-spin" />
-                : config.requiresProxy ? 'Yes' : 'No'}
-            </Button>
+            <div className="mt-1 flex items-center gap-2">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={config.requiresProxy}
+                onClick={() => setProxyMutation.mutate({ configId, requiresProxy: !config.requiresProxy })}
+                disabled={setProxyMutation.isPending}
+                title="Toggle whether this venue is scraped through the proxy"
+                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                  config.requiresProxy ? 'bg-primary' : 'bg-muted-foreground/30'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                    config.requiresProxy ? 'translate-x-[18px]' : 'translate-x-0.5'
+                  }`}
+                />
+              </button>
+              <span className="text-xs font-medium">
+                {setProxyMutation.isPending ? 'Saving…' : config.requiresProxy ? 'Yes' : 'No'}
+              </span>
+            </div>
+            {setProxyMutation.error && (
+              <div className="mt-1 text-xs text-destructive">
+                Couldn't update: {setProxyMutation.error.message}
+              </div>
+            )}
           </div>
           <div><div className="text-muted-foreground text-xs">Schedule</div><code className="text-xs">{config.schedule}</code></div>
           <div><div className="text-muted-foreground text-xs">Last analyzed</div><Timestamp date={config.analyzedAt} /></div>
